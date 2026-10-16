@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Store } from '../src/store.ts';
+import { createApp } from '../src/server.ts';
+import { demoMapping } from '../src/demo.ts';
+import { economics } from '../src/order-workflow.ts';
+
+test('ciclo HTTP preserva perfil, tarefas e custos até encerramento simulado', async () => {
+  const store = new Store(':memory:'), port = 14319, server = createApp(store, port);
+  await new Promise<void>(r => server.listen(port, '127.0.0.1', r));
+  try {
+    const base = `http://127.0.0.1:${port}`, page = await (await fetch(base)).text();
+    const token = page.match(/name="catalog-token" content="([^"]+)/)![1];
+    const request = async (path: string, body?: unknown) => {
+      const r = await fetch(base + '/api/' + path, { method: body ? 'POST' : 'GET', headers: { 'x-catalog-token': token, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+      return { status: r.status, body: await r.json() as any };
+    };
+    const profile = { id:'test-profile',version:'1',rowType:'kind',parentValue:'parent',variantValue:'variant',parentId:'id',variantParentId:'parent',parentFields:['title'],mapping:{supplierKey:'test',productId:'product',title:'title',sku:'sku',price:'price',options:[{name:'Size',column:'size'}]} };
+    const raw = 'kind,id,parent,product,title,sku,price,size\nparent,001,,,Synthetic shirt,,,\nvariant,,001,,,00001,19.90,S\n';
+    const created = await request('orders', { name:'Synthetic',email:'simulation@example.com',filename:'supplier.csv',data:Buffer.from(raw).toString('base64'),profile,mapping:demoMapping,demo:true });
+    assert.equal(created.status,200,JSON.stringify(created.body)); const id = created.body.id;
+    assert.equal(store.artifact(id,'original').toString(),raw);
+    assert.equal(JSON.parse(store.artifact(id,'profile-0.json').toString()).id,'test-profile');
+    assert.equal(JSON.parse(store.artifact(id,'lineage-0.json').toString())[0].sku,'00001');
+    assert.equal(store.db.prepare('SELECT COUNT(*) n FROM order_tasks WHERE order_id=?').get(id)?.n,8);
+    assert.equal((await request('action',{id,action:'process'})).status,400);
+    for (const action of ['approve','demoPayment','process','demoDelivery']) assert.equal((await request('action',{id,action})).status,200);
+    assert.equal(economics(store.get(id)).contribution,null);
+    assert.equal((await request('action',{id,action:'economics',hours:2,fees:7,costs:2})).status,400);
+    assert.equal((await request('action',{id,action:'economics',hours:2,fees:7,costs:2,note:'Simulação: prospecção 30m, atendimento 30m, produção/QA/correções 60m.'})).status,200);
+    assert.equal(economics(store.get(id)).contribution,90);
+    assert.equal(economics(store.get(id)).state,'hypothetical');
+    // Raw parent/variant revisions preserve the same profile and require fresh approval.
+    const revised = await request('revise',{id,filename:'supplier.csv',data:Buffer.from(raw.replace('19.90','20.90')).toString('base64'),mapping:demoMapping});
+    assert.equal(revised.status,200,JSON.stringify(revised.body));
+    assert.equal(revised.body.status,'revision_approval');
+    assert.equal(economics(store.get(id)).state,'costs_missing');
+    assert.equal((await request('action',{id,action:'process'})).status,400);
+    for (const action of ['revisionApprove','process','demoDelivery']) assert.equal((await request('action',{id,action})).status,200);
+    assert.equal(JSON.parse(store.artifact(id,'profile-1.json').toString()).id,'test-profile');
+    assert.equal(store.artifact(id,'original').toString(),raw);
+    assert(store.artifact(id,'shopify-1.csv').toString().includes('20.90'));
+    assert.equal((await request('action',{id,action:'economics',hours:2.25,fees:7,costs:2,note:'Simulação inclui 15 minutos adicionais da revisão.'})).status,200);
+    assert.equal((await request('action',{id,action:'demoClose'})).status,200);
+    assert.equal(store.get(id).acceptedAt,undefined);
+    const state=(await request('state')).body;
+    assert(state.orders[0].tasks.every((t:any)=>t.state==='done'));
+    assert.equal(store.db.prepare('SELECT status FROM outbox').get()?.status,'draft');
+    const live={...store.get(id),demo:false,paymentMode:'live' as const};
+    store.save(live);
+    assert.equal((await request('action',{id,action:'demoDelivery'})).status,400);
+    assert.equal(economics({...live,status:'refund_pending'}).contribution,null);
+  } finally { await new Promise<void>(r=>server.close(()=>r()));store.close(); }
+});

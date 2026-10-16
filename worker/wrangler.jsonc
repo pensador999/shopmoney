@@ -1,0 +1,7 @@
+{
+  "name": "catalog-ops-payments",
+  "main": "index.ts",
+  "compatibility_date": "2026-10-15",
+  "workers_dev": true,
+  "d1_databases": [{ "binding": "DB", "database_name": "catalog-ops-events", "database_id": "CONFIGURE_AFTER_CREATING_D1" }]
+}

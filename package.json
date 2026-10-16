@@ -1,0 +1,48 @@
+{
+  "name": "catalog-ops",
+  "version": "0.0.0",
+  "type": "module",
+  "imports": {
+    "#*": "./agent/*",
+    "#evals/*": "./evals/*"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.ts",
+    "dev": "node --env-file-if-exists=.env src/server.ts",
+    "agents": "eve dev --no-ui --host 127.0.0.1 --port 2000 --no-default-extensions --resume",
+    "build": "eve build",
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "demo": "node src/cli.ts demo",
+    "doctor": "node src/cli.ts doctor"
+  },
+  "dependencies": {
+    "@vercel/connect": "2.5.2",
+    "adm-zip": "0.6.1",
+    "ai": "^7.0.137",
+    "csv-parse": "7.0.3",
+    "csv-stringify": "6.9.0",
+    "eve": "0.80.0",
+    "exceljs": "4.4.0",
+    "imapflow": "2.4.3",
+    "mailparser": "3.9.39",
+    "nodemailer": "10.1.1",
+    "stripe": "23.0.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "0.5.8",
+    "@types/mailparser": "3.9.0",
+    "@types/node": "24.x",
+    "@types/nodemailer": "8.0.2",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
+  }
+}

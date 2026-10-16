@@ -1,0 +1,19 @@
+# Documentação do projeto
+
+## Negócio e execução
+
+- [Estado, evidências e próximos passos](STATUS.md)
+- [Políticas operacionais](../POLITICAS.md)
+- [Guia de configuração](../GUIA_CONFIGURACAO.md)
+- [Retomada técnica](../RETOMADA.md)
+
+## Engenharia
+
+- [Arquitetura](../ARQUITETURA.md)
+- [Responsabilidades e contratos dos agentes](../CONTRATOS_AGENTES.md)
+- [Padrões de catálogo](../PADROES_CATALOGO.md)
+- [Perfil por fornecedor](../PERFIL_FORNECEDOR.md)
+- [Referências e limites de reaproveitamento](../REFERENCIAS_BRK.md)
+- [Contribuição e proteção de dados](../CONTRIBUTING.md)
+
+Os documentos existentes permanecem na raiz para preservar links e instruções de automação. Este índice é o ponto de entrada. Não arquivar conversas completas, dados de clientes ou logs de execução no Git.
