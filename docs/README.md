@@ -2,6 +2,8 @@
 
 ## Negócio e execução
 
+- [Plano operacional, automação do painel e migração Vercel](PLANO_OPERACIONAL.md)
+
 - [Estado, evidências e próximos passos](STATUS.md)
 - [Políticas operacionais](../POLITICAS.md)
 - [Guia de configuração](../GUIA_CONFIGURACAO.md)
