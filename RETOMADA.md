@@ -1,5 +1,9 @@
 # Retomada — 16/10/2026
 
+## Destinos atualizados — 17/10/2026
+
+Base enviada com autorização explícita para `https://github.com/pensador999/catanaops`, branch main. Supabase alvo `aqkwbmggkvvfhqaivxlh` continua recusando consulta de leitura; nenhuma estrutura remota criada. Ler `docs/MODELO_SUPABASE.md` e `docs/CONEXAO_NUVEM.md` antes de migrar. SQLite continua sendo o banco utilizado pelo aplicativo. Reconexão Supabase pelo titular é a dependência atual.
+
 ## Atualização mais recente — moldes de hoje
 
 Ler `PADROES_CATALOGO.md`. Refs remotas HOOK-PRIME e DESCRI-OES-PRODUTOS atualizadas; análise focada nos commits de 16/10 em Brasília. Nove CSVs compartilham molde Bling59, não importação nativa Shopify. Base salva apenas com cabeçalhos/formato e metadados estruturais; nenhum registro real foi copiado para testes ou pedidos.
