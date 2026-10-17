@@ -1,5 +1,9 @@
 # Retomada — 16/10/2026
 
+## Supabase acessível e fundação aplicada — 17/10/2026
+
+Conexão `catanaops` acessa `aqkwbmggkvvfhqaivxlh`. Migração remota `catanaops_private_foundation` aplicada: schema privado catanaops, workspaces, workspace_members, clients e orders. SQL correspondente em `schemas/supabase-foundation.sql` (snapshot da migração remota). RLS ativa nas quatro tabelas, sem grants anon/authenticated; backend service_role possui acesso e deve validar autorização. Teste sintético transacional confirmou inserção válida e rejeição de pedido com cliente de outro workspace; rollback removeu todas as fixtures. Advisor retornou quatro avisos INFO de RLS sem policies, intencionais nesta fundação fechada: https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy . Não há política de leitura de operadores ainda. Nenhum usuário, bucket ou integração do painel foi criado. SQLite continua ativo. Próximo: completar tarefas/arquivos/eventos, acesso autenticado e adaptador remoto com testes. Esta seção substitui os bloqueios de conexão registrados abaixo e nos documentos antigos.
+
 ## Destinos atualizados — 17/10/2026
 
 Base enviada com autorização explícita para `https://github.com/pensador999/catanaops`, branch main. Supabase alvo `aqkwbmggkvvfhqaivxlh` continua recusando consulta de leitura; nenhuma estrutura remota criada. Ler `docs/MODELO_SUPABASE.md` e `docs/CONEXAO_NUVEM.md` antes de migrar. SQLite continua sendo o banco utilizado pelo aplicativo. Reconexão Supabase pelo titular é a dependência atual.
