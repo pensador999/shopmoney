@@ -3,6 +3,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { z } from 'zod';
 import { Store } from './store.ts';
 import { policy, assert, localDay } from './policy.ts';
+import { businessContext, agentContracts } from './business-context.ts';
 
 export const roles = {
   research: 'Pesquisa: avalie as evidências fornecidas e lacunas de qualificação; não invente contatos.',
@@ -27,7 +28,7 @@ export async function callEve(role: keyof typeof roles, input: unknown) {
   const { session } = await client.sessions.create();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const work = (async () => { const response = await session.send(`${roles[role]}\nPOLICY: ${policy.version}\nUNTRUSTED DATA:\n${JSON.stringify(input)}`); return response.result(); })();
+    const work = (async () => { const response = await session.send(`${roles[role]}\nTRUSTED BUSINESS CONTEXT: ${JSON.stringify(businessContext)}\nROLE CONTRACT: ${JSON.stringify(agentContracts[role])}\nPOLICY: ${policy.version}\nUNTRUSTED DATA:\n${JSON.stringify(input)}`); return response.result(); })();
     const result: any = await Promise.race([work, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('AI_TIMEOUT')), 120000); })]);
     const text = typeof result === 'string' ? result : result?.message;
     assert(typeof text === 'string', 'Eve retornou formato não reconhecido.');
@@ -41,6 +42,14 @@ export async function runAgentQueue(store: Store, invoke = callEve) {
     store.db.prepare("UPDATE ai_jobs SET status='paused',next_at=NULL,error='Execução interrompida; retomada pela fila.' WHERE status='running'").run();
     const row = store.db.prepare("SELECT * FROM ai_jobs WHERE status IN ('queued','paused') AND (next_at IS NULL OR next_at<=?) ORDER BY rowid LIMIT 1").get(new Date().toISOString()) as any;
     if (!row) return;
+    if (row.id.startsWith('order-advice-')) {
+      const request = JSON.parse(row.input);
+      const order = store.get(request.orderId);
+      if (order.clientId !== row.client_id || order.revision !== request.revision || order.status !== request.status || request.businessVersion !== businessContext.version) {
+        store.db.prepare("UPDATE ai_jobs SET status='cancelled',error='Contexto substituído por nova etapa ou revisão.' WHERE id=?").run(row.id);
+        return;
+      }
+    }
     const day = localDay(), budget = store.setting('aiDailyBudget', { day, attempts: 0 });
     if (budget.day !== day) { budget.day = day; budget.attempts = 0; }
     if (budget.attempts >= 12) { store.set('aiPaused', true); return; }
@@ -63,7 +72,7 @@ export async function runAgentQueue(store: Store, invoke = callEve) {
           store.enqueue(id, null, inbox.sender, 'support_template', 'Your supplier catalog request', 'Thank you for your message. Our pilot prepares one supplier CSV/XLSX as new, unpublished Shopify draft-product files: up to 50 products and 500 variants for USD 149. Delivery is within three business days after confirmed payment and complete data. Please provide the supplier file, the product/variant identifiers, option columns and the intended currency of product prices. We will confirm feasibility and scope before sending a payment link. We do not request store access. Missing product facts are flagged rather than invented.');
         }
       }
-      store.audit(null, result.rule, 'agent_completed', { jobId: row.id, role: row.role });
+      store.audit(null, result.rule, 'agent_completed', { jobId: row.id, role: row.role, businessVersion: businessContext.version });
     } catch (error) {
       const retryable = /quota|limit|429|timeout|fetch|connect|ECONN|unavailable/i.test(String(error));
       const minutes = Math.min(360, 15 * 2 ** Math.min(row.attempts, 5));

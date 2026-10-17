@@ -15,6 +15,8 @@ import { extname } from 'node:path';
 import { supplierProfileSchema } from './supplier-adapter.ts';
 import { economics, orderTasks } from './order-workflow.ts';
 import { supportedFormats } from './formats.ts';
+import { businessContext, agentContracts } from './business-context.ts';
+import { orderAssignment, orderAgentRequest } from './coordination.ts';
 
 export function createApp(store: Store, port = 4318) {
   const token = randomBytes(24).toString('hex'), service = new Service(store);
@@ -40,6 +42,7 @@ export function createApp(store: Store, port = 4318) {
       let result: unknown;
       if (req.method === 'GET' && path === '/api/state') result = {
         orders: store.orders().map(o => ({ ...o, economics: economics(o), tasks: orderTasks(o) })), gates: service.readiness(), policy, formats: supportedFormats(),
+        coordination: store.orders().map(orderAssignment), team: agentContracts, business: businessContext,
         messages: store.db.prepare('SELECT * FROM outbox ORDER BY created_at DESC LIMIT 100').all(),
         inbox: store.db.prepare('SELECT * FROM inbox ORDER BY received_at DESC LIMIT 100').all(),
         jobs: store.db.prepare('SELECT id,role,status,result,error,next_at FROM ai_jobs ORDER BY rowid DESC LIMIT 100').all(),
@@ -87,7 +90,11 @@ export function createApp(store: Store, port = 4318) {
         assert(service.readiness().filter(g=>g.name!=='bankPayout').every(g=>g.ready), 'Complete todas as verificações, exceto o primeiro repasse.');
         const evidence = z.string().min(20).max(2000).parse(body.evidence);
         store.set('firstPilotAuthorized', true); store.audit(null, 'PAY-01', 'first_supervised_pilot_authorized', { evidence }); result={ok:true};
-      } else if (req.method === 'POST' && path === '/api/agent') result = { id: enqueueAgent(store, z.enum(Object.keys(roles) as [keyof typeof roles]).parse(body.role), body.input) };
+      } else if (req.method === 'POST' && path === '/api/order-advice') {
+        const task = orderAgentRequest(store, z.string().parse(body.id));
+        result = { id: enqueueAgent(store, task.role, task.input, task.clientId, task.id) };
+      }
+      else if (req.method === 'POST' && path === '/api/agent') result = { id: enqueueAgent(store, z.enum(Object.keys(roles) as [keyof typeof roles]).parse(body.role), body.input) };
       else if (req.method === 'POST' && path === '/api/lead') result = { id: addLead(store, z.object({ name: z.string().min(1), email: z.email(), website: z.url(), source: z.url(), contactSource: z.url(), evidence: z.string() }).parse(body)) };
       else if (req.method === 'POST' && path === '/api/qualify') { const lead = store.db.prepare('SELECT * FROM leads WHERE id=?').get(body.id) as any; assert(lead, 'Lead não encontrado.'); const data = JSON.parse(lead.data); data.qualified = z.boolean().parse(body.qualified); store.db.prepare('UPDATE leads SET data=? WHERE id=?').run(JSON.stringify(data), body.id); result = { ok: true }; }
       else if (req.method === 'POST' && path === '/api/campaign') { prepareCampaign(store); result = { ok: true }; }

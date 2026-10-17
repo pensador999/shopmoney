@@ -19,6 +19,13 @@ test('ciclo HTTP preserva perfil, tarefas e custos até encerramento simulado', 
     const raw = 'kind,id,parent,product,title,sku,price,size\nparent,001,,,Synthetic shirt,,,\nvariant,,001,,,00001,19.90,S\n';
     const created = await request('orders', { name:'Synthetic',email:'simulation@example.com',filename:'supplier.csv',data:Buffer.from(raw).toString('base64'),profile,mapping:demoMapping,demo:true });
     assert.equal(created.status,200,JSON.stringify(created.body)); const id = created.body.id;
+    const advice = await request('order-advice',{id});
+    assert.equal(advice.status,200);
+    assert.equal((await request('order-advice',{id})).body.id,advice.body.id);
+    const job=store.db.prepare('SELECT client_id,role,input FROM ai_jobs WHERE id=?').get(advice.body.id) as any;
+    assert.equal(job.client_id,created.body.clientId);
+    assert.equal(job.role,'planner');
+    assert(!job.input.includes('00001'));
     assert.equal(store.artifact(id,'original').toString(),raw);
     assert.equal(JSON.parse(store.artifact(id,'profile-0.json').toString()).id,'test-profile');
     assert.equal(JSON.parse(store.artifact(id,'lineage-0.json').toString())[0].sku,'00001');
@@ -44,6 +51,8 @@ test('ciclo HTTP preserva perfil, tarefas e custos até encerramento simulado', 
     assert.equal((await request('action',{id,action:'demoClose'})).status,200);
     assert.equal(store.get(id).acceptedAt,undefined);
     const state=(await request('state')).body;
+    assert.equal(state.coordination[0].owner,'Coordenação');
+    assert.equal(Object.keys(state.team).length,8);
     assert(state.orders[0].tasks.every((t:any)=>t.state==='done'));
     assert.equal(store.db.prepare('SELECT status FROM outbox').get()?.status,'draft');
     const live={...store.get(id),demo:false,paymentMode:'live' as const};

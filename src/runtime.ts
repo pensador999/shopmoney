@@ -2,7 +2,8 @@ import { Store } from './store.ts';
 import { Service } from './service.ts';
 import { Payments } from './payments.ts';
 import { pollInbox, reconcileSent, sendOutbox, prepareCampaign } from './mail.ts';
-import { runAgentQueue } from './agents.ts';
+import { runAgentQueue, enqueueAgent } from './agents.ts';
+import { orderAgentRequest } from './coordination.ts';
 
 export async function syncPayments(store: Store) {
   const url = process.env.PUBLIC_URL, token = process.env.PAYMENT_SYNC_TOKEN;
@@ -27,7 +28,13 @@ export async function tick(store: Store) {
   for (const order of store.orders().filter(o => ['queued','running'].includes(o.status))) await step('production', () => service.process(order.id));
   service.closeExpired();
   if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) await step('mailbox', async () => { await pollInbox(store); await reconcileSent(store); });
-  if (process.env.AI_ENABLED === 'true') await step('agents', () => runAgentQueue(store));
+  if (process.env.AI_ENABLED === 'true') await step('agents', async () => {
+    for (const o of store.orders().filter(o => !['closed','cancelled','refunded'].includes(o.status)).slice(0,20)) {
+      const task = orderAgentRequest(store, o.id);
+      enqueueAgent(store, task.role, task.input, task.clientId, task.id);
+    }
+    await runAgentQueue(store);
+  });
   if (store.setting('campaignAuthorized', false)) await step('campaign', async () => prepareCampaign(store));
   // Approved deterministic templates can run unattended once the owner enabled this policy.
   if (store.setting('routineAuthorized', false)) store.db.prepare("UPDATE outbox SET status='approved' WHERE status='draft' AND kind IN ('proposal','delivery') AND order_id IN (SELECT id FROM orders WHERE json_extract(data,'$.demo')=0 AND json_extract(data,'$.paymentMode')='live')").run();

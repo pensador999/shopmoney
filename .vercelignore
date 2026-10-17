@@ -5,3 +5,13 @@ node_modules
 .output
 .nitro
 dist
+data
+artifacts
+backups
+logs
+references
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+.git

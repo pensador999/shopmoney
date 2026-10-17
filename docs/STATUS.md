@@ -1,5 +1,7 @@
 # Estado do projeto — 16/10/2026
 
+Atualização técnica 17/10: ler [liberação Vercel](LIBERACAO_VERCEL.md). Supabase acessível, 12 tabelas e bucket privado criados, testes de fila remota passaram. Painel recebeu quadro de responsáveis e análises vinculadas ao pedido; 28 testes locais passaram. Aplicativo ainda usa SQLite; não há login nem executor remoto conectado. Essa atualização substitui os bloqueios antigos de acesso mencionados em documentos anteriores.
+
 ## Objetivo comercial
 
 Preparação e conferência de catálogos de fornecedores para pequenas agências Shopify dos EUA. Hipótese inicial: US$149 por um fornecedor, até 50 produtos e 500 variantes, ambos os limites aplicáveis; produtos novos em rascunho. A agência importa o pacote. Preço e demanda ainda não comprovados por vendas.

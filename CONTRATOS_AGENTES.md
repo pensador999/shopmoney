@@ -1,5 +1,7 @@
 # Contratos do time — especificação para implementação
 
+Incremento 17/10: contratos executáveis e contexto empresarial versionado em `src/business-context.ts`; coordenação consultiva ligada ao pedido em `src/coordination.ts`, acionável no quadro da visão geral e automaticamente pelo runtime quando IA habilitada. Resultado de IA não conclui etapas. Supabase possui fila serial privada testada, ainda não conectada ao serviço SQLite. Detalhes e limites em `docs/LIBERACAO_VERCEL.md`; os pontos abaixo registram a especificação e o histórico anterior.
+
 Atualização 16/10: etapas do pedido agora persistem em `order_tasks` e aparecem no painel, derivadas do estado do pedido. Responsável, dependência, resultado esperado, regra, revisão, prazo e limite de produção estão representados. Comercial e pesquisa ainda não são tarefas conectadas a esse ciclo. Não há delegação automática para especialistas LLM.
 
 Prioridade: entrega utilizável de piloto e margem medida. Este documento define o próximo incremento; não afirma que toda a orquestração já esteja implementada.

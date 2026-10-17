@@ -11,6 +11,8 @@
 
 ## Engenharia
 
+- [Estado de execução e critérios para importar na Vercel](LIBERACAO_VERCEL.md)
+
 - [Modelo de dados Supabase e critérios de migração](MODELO_SUPABASE.md)
 
 - [Conexão aos novos destinos e dependências de acesso](CONEXAO_NUVEM.md)
