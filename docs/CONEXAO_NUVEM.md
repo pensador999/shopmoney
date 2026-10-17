@@ -2,20 +2,20 @@
 
 ## Destinos informados pelo titular
 
-- GitHub principal pretendido: https://github.com/catanaops-bit/shopmoney
-- Supabase: https://dlyltdqojbmmcwkwjnuf.supabase.co
-- Projeto Supabase: `dlyltdqojbmmcwkwjnuf`
+- GitHub principal: https://github.com/pensador999/catanaops
+- Supabase: https://aqkwbmggkvvfhqaivxlh.supabase.co
+- Projeto Supabase: `aqkwbmggkvvfhqaivxlh`
 - Vercel: importação futura; ainda não existe implantação validada neste fluxo.
 
 ## Verificação desta etapa
 
-A consulta do novo GitHub por Git retornou Repository not found. O conector Supabase lista somente outro projeto; consulta de leitura no projeto acima retornou falta de permissão. Nenhuma tabela, credencial ou permissão remota foi alterada. O projeto Anzol não será usado para esta operação.
+Em 17/10/2026, o novo GitHub foi acessado por Git e estava vazio. O conector Supabase ainda lista somente Anzol; consulta de leitura no projeto acima retornou falta de permissão. Nenhuma tabela, credencial ou permissão remota foi alterada. O projeto Anzol não será usado para esta operação.
 
-O remote `origin` anterior permanece preservado para não perder a referência já funcional. O novo destino está registrado como `catanaops`, ainda sem acesso confirmado. Não enviar alterações novas ao repositório anterior como substituição silenciosa.
+O remote principal `origin` aponta para `pensador999/catanaops`. Destinos anteriores foram preservados como `legacy-shopmoney` e `legacy-catanaops-bit`, sem novos envios. A pasta local permanece `catalog-ops` para preservar automações e execução existentes.
 
 ## Ação do titular
 
-Autorizar a integração GitHub para acessar `catanaops-bit/shopmoney` e conectar o Supabase à conta/organização que possui `dlyltdqojbmmcwkwjnuf`. Não é necessário tornar o repositório público nem enviar senhas, tokens ou service_role no chat.
+Reconectar o plugin Supabase autorizando a organização que possui `aqkwbmggkvvfhqaivxlh`. O acesso Git ao novo repositório já funciona. Não é necessário tornar o repositório público nem enviar senhas, tokens ou service_role no chat.
 
 ## Sequência após acesso
 

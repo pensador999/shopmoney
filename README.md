@@ -1,6 +1,6 @@
 # Shopmoney · Catana Ops
 
-Repositório central do projeto: https://github.com/pensador999/shopmoney.
+Repositório central do projeto: https://github.com/pensador999/catanaops.
 Catana Ops é o nome operacional; `catalog-ops` permanece como nome técnico da aplicação e da pasta local.
 
 **Fase atual: validação local, sem operação comercial liberada.** Objetivo: entregar um piloto de preparação de catálogo Shopify em dólares, medindo custos e esforço total.
