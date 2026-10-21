@@ -43,28 +43,36 @@ export async function mountStudio({api,notice}){
   const collections={facts,variants,media},rows={facts:[],variants:[],media:[]};
   const bool=(label,value,parent)=>{const node=field(label,'','checkbox',parent);node.checked=value;return node;};
   function addRow(kind,item){
-    const box=el('fieldset'),row={};
-    const keys=kind==='facts'?[['id','ID do fato'],['text','Texto factual'],['source','Fonte']]:
-      kind==='variants'?[['id','ID da variante'],['productId','Produto pai'],['sku','SKU exato'],['color','Cor'],['size','Tamanho']]:
-      [['id','ID da imagem'],['productId','Produto pai'],['url','URL HTTPS ou ilustração sintética'],['source','Origem / autorização'],['color','Cor'],['alt','Texto alternativo'],['variantIds','IDs das variantes, separados por vírgula']];
-    for(const [key,label]of keys)row[key]=field(label,Array.isArray(item[key])?item[key].join(', '):item[key]??'',key==='text'?'textarea':'text',box);
+    const box=el('fieldset'),entry={};
     if(kind==='facts'){
-      const l=el('label','Bloco editorial'),select=el('select');for(const [value,text]of [['presentation','Apresentação'],['context','Contexto de uso'],['fit','Caimento'],['features','Características'],['composition','Composição'],['care','Cuidados'],['size','Medidas']])select.append(el('option',text,{value}));select.value=item.section??'features';l.append(select);box.append(l);row.section=select;
-      row.approved=bool('Fato e fonte revisados',item.approved,box);
+      entry.id=field('ID do fato',item.id,'text',box);
+      const sLabel=el('label','Seção'),s=el('select');
+      for(const [k,l]of [['presentation','A peça'],['context','Como usar'],['fit','Caimento'],['features','Características'],['composition','Composição'],['care','Cuidados'],['size','Medidas']])s.append(el('option',l,{value:k}));
+      s.value=item.section;sLabel.append(s);box.append(sLabel);entry.section=s;
+      entry.text=field('Fato aprovado',item.text,'textarea',box);entry.source=field('Fonte / evidência',item.source,'text',box);
+      entry.approved=bool('Fato conferido e aprovado',item.approved,box);
+    }else if(kind==='variants'){
+      entry.id=field('ID da variante',item.id,'text',box);entry.productId=field('ID do produto pai',item.productId,'text',box);
+      entry.sku=field('SKU textual',item.sku,'text',box);entry.color=field('Cor',item.color,'text',box);entry.size=field('Tamanho',item.size,'text',box);
+    }else{
+      entry.id=field('ID da mídia',item.id,'text',box);entry.productId=field('ID do produto',item.productId,'text',box);
+      entry.url=field('URL HTTPS ou fixture local',item.url,'text',box);entry.source=field('Fonte / autorização',item.source,'text',box);
+      entry.color=field('Cor representada',item.color,'text',box);entry.variantIds=field('Variantes associadas (IDs por vírgula)',item.variantIds.join(', '),'text',box);
+      const rLabel=el('label','Função'),r=el('select');for(const v of ['hero','detail','context'])r.append(el('option',v,{value:v}));r.value=item.role;rLabel.append(r);box.append(rLabel);entry.role=r;
+      const vLabel=el('label','Vista da peça'),vw=el('select');for(const [k,l]of [['unknown','Não classificada'],['front','Frente'],['back','Costas'],['detail','Detalhe / Zoom'],['context','Contexto / Modelo']])vw.append(el('option',l,{value:k}));vw.value=item.view??'unknown';vLabel.append(vw);box.append(vLabel);entry.view=vw;
+      entry.viewConfirmed=bool('Vista frente/costas/detalhe confirmada visualmente',item.viewConfirmed!==false,box);
+      entry.alt=field('Descrição objetiva da imagem',item.alt,'text',box);
+      entry.authorized=bool('Uso autorizado',item.authorized,box);entry.approved=bool('Conferência visual realizada pelo operador',item.approved,box);
     }
-    if(kind==='media'){
-      const l=el('label','Papel da imagem'),select=el('select');for(const [value,text]of [['hero','Principal'],['detail','Detalhe'],['context','Contexto']])select.append(el('option',text,{value}));select.value=item.role??'hero';l.append(select);box.append(l);row.role=select;
-      row.approved=bool('Conferi visualmente a peça e a cor',item.approved,box);row.authorized=bool('Uso autorizado',item.authorized,box);
-    }
-    const remove=el('button','Remover',{type:'button'});remove.onclick=()=>{rows[kind]=rows[kind].filter(x=>x!==row);box.remove();markDirty();};box.append(remove);
-    rows[kind].push(row);collections[kind].append(box);
+    action('Remover',()=>{rows[kind].splice(rows[kind].indexOf(entry),1);box.remove();markDirty();},box);
+    rows[kind].push(entry);collections[kind].append(box);
   }
-  action('Adicionar fato',()=>{addRow('facts',{id:'fato-'+(rows.facts.length+1),approved:false});markDirty();},form);
-  const variantDetails=el('details');variantDetails.append(el('summary','3. Variantes e SKUs'),variants);form.append(variantDetails);
-  action('Adicionar variante',()=>{addRow('variants',{productId:fields.product.value});markDirty();},variantDetails);
-  const mediaDetails=el('details');mediaDetails.append(el('summary','4. Associação de imagens'),el('p','Fotos compartilhadas por tamanhos da mesma cor são permitidas. Confirmar peça, cor e direitos. A IA não analisou estas imagens.'),media);form.append(mediaDetails);
-  action('Adicionar imagem',()=>{addRow('media',{productId:fields.product.value,approved:false,authorized:false,variantIds:[]});markDirty();},mediaDetails);
-  const kitBox=el('details');kitBox.append(el('summary','5. Componentes do kit e guias de medidas'));form.append(kitBox);
+  action('Adicionar fato',()=>{addRow('facts',{id:'fato-'+(rows.facts.length+1),section:'features',text:'',source:'',approved:false});markDirty();},form);
+  form.append(el('h3','3. Variantes e SKUs'),variants);
+  action('Adicionar variante',()=>{addRow('variants',{id:'V-'+(rows.variants.length+1),productId:fields.product.value,sku:'',color:'',size:''});markDirty();},form);
+  form.append(el('h3','4. Imagens e associação por cor/tamanho'),media);
+  action('Adicionar imagem',()=>{addRow('media',{id:'IMG-'+(rows.media.length+1),productId:fields.product.value,url:'/studio-fixture-sand.svg',source:'',color:'',variantIds:[],role:'detail',view:'unknown',viewConfirmed:true,alt:'',authorized:false,approved:false});markDirty();},form);
+  const kitBox=el('details');kitBox.append(el('summary','Componentes de kit e guias de medidas por componente'));form.append(kitBox);
   const componentRows=[],guideRows=[];
   const split=v=>v.split(';').map(x=>x.trim()).filter(Boolean);
   function componentRow(c={}){const box=el('fieldset'),r={};for(const [k,l]of [['id','ID do componente'],['title','Nome do componente'],['factIds','IDs dos fatos (separados por ;)'],['mediaIds','IDs das imagens (separados por ;)']])r[k]=field(l,Array.isArray(c[k])?c[k].join(';'):c[k]??'','text',box);componentRows.push(r);action('Remover componente',()=>{componentRows.splice(componentRows.indexOf(r),1);box.remove();markDirty();},box);kitBox.append(box);}
@@ -78,8 +86,19 @@ export async function mountStudio({api,notice}){
   action('Carregar ficha JSON',async()=>{const file=fileField.files[0];if(!file||file.size>1000000)throw Error('Selecione JSON de até 1 MB.');const v=JSON.parse(await file.text());v.brand.approved=false;v.brand.materialAuthorization=false;v.brand.version=crypto.randomUUID();v.product.original.approved=false;v.product.facts.forEach(f=>f.approved=false);v.media.forEach(m=>{m.approved=false;m.authorized=false;});(v.blocks??[]).forEach(b=>b.approved=false);(v.adaptive?.guides??[]).forEach(g=>g.approved=false);if(v.adaptive?.catalog)v.adaptive.catalog.approved=false;record=null;creationId=crypto.randomUUID();fill(v);markDirty();notice('Ficha carregada para revisão, sem herdar aprovações.');},intake);
   root.append(intake);
   const operations=el('article');operations.append(el('h2','Pedido e tarefas desta ficha'));const orderId=field('ID de pedido existente (opcional)','','text',operations),operationState=el('div');
-  action('Vincular pedido ou criar pedido de validação',async()=>{if(!record||dirty)throw Error('Salve a ficha primeiro.');await api('studio/connect-order',{id:record.id,scope:record.request.scope,...(orderId.value?{orderId:orderId.value}:{})});await showOperations();},operations);operations.append(operationState);root.append(operations);
-  async function showOperations(){if(!record)return;const o=await api('studio/operations',{id:record.id,scope:record.request.scope});operationState.replaceChildren(el('p',o.order?'Pedido '+o.order.id+' · '+o.order.status+' · validação local':'Nenhum pedido vinculado'),el('p',o.operatorNext));for(const t of o.operationalTasks)operationState.append(el('p',t.owner+' · '+t.expected+' · '+t.state));for(const t of o.editorialTasks)operationState.append(el('p','Editorial: '+t.role+' · '+t.state+' · revisão '+t.revision));}
+  action('Vincular pedido ou criar pedido de validação',async()=>{if(!record||dirty)throw Error('Salve a ficha primeiro.');await api('studio/connect-order',{id:record.id,scope:record.request.scope,...(orderId.value?{orderId:orderId.value}:{})});await showOperations();},operations);
+  action('Sincronizar escopo com pedido',async()=>{if(!record||dirty)throw Error('Salve a ficha primeiro.');await api('studio/sync-scope',{id:record.id,scope:record.request.scope});await showOperations();notice('Escopo sincronizado no pedido. Aprove o escopo e confirme pagamento/simulação antes da entrega.');},operations);
+  action('Sincronizar esforço no pedido',async()=>{if(!record||dirty)throw Error('Salve a ficha primeiro.');await api('studio/sync-effort',{id:record.id,scope:record.request.scope});await showOperations();notice('Esforço consolidado no pedido vinculado.');},operations);
+  action('Gerar entrega do pedido vinculado',async()=>{if(!record||dirty)throw Error('Salve a ficha primeiro.');await api('studio/deliver-order',{id:record.id,scope:record.request.scope});await showOperations();notice('Pacote unificado do pedido gerado e pronto para download.');},operations);
+  operations.append(operationState);root.append(operations);
+  async function showOperations(){
+    if(!record)return;const o=await api('studio/operations',{id:record.id,scope:record.request.scope});
+    operationState.replaceChildren(el('p',o.order?'Pedido '+o.order.id+' · '+o.order.status+' · validação local':'Nenhum pedido vinculado'),el('p',o.operatorNext));
+    if(o.order?.economics){const ec=o.order.economics;operationState.append(el('p','Economia do pedido: '+ec.state+' · alerta '+ec.budgetAlert+' · saldo horas '+(ec.remainingHoursBudget??'n/a')+'h'));}
+    if(o.order?.handoffs){operationState.append(el('p','Handoffs verificados: '+(o.order.handoffs.verifiedRoles.join(', ')||'nenhum')));}
+    for(const t of o.operationalTasks)operationState.append(el('p',t.owner+' · '+t.expected+' · '+t.state));
+    for(const t of o.editorialTasks)operationState.append(el('p','Editorial: '+t.role+' · '+t.state+' · revisão '+t.revision));
+  }
   const save=el('button','Salvar rascunho e atualizar prévias',{type:'submit',class:'primary'});form.append(save);
   form.onsubmit=e=>{e.preventDefault();run(saveDraft);};form.addEventListener('input',markDirty);
   const advanced=el('details');advanced.append(el('summary','Opção avançada · documento completo em JSON'));

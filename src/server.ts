@@ -16,6 +16,7 @@ import { readTable, mappingSchema } from './catalog.ts';
 import { extname } from 'node:path';
 import { supplierProfileSchema } from './supplier-adapter.ts';
 import { economics, orderTasks } from './order-workflow.ts';
+import { recordHandoff, recordPreSaleHandoffs, orderHandoffLedger } from './handoffs.ts';
 import { supportedFormats } from './formats.ts';
 import { businessContext, agentContracts } from './business-context.ts';
 import { orderAssignment, orderAgentRequest } from './coordination.ts';
@@ -67,6 +68,7 @@ export function createApp(store: Store, port = 4318) {
       let result: unknown;
       if(req.method==='GET'&&path==='/api/studio/list')result=studio.list();
       else if(req.method==='POST'&&path==='/api/studio/intake')result=intakeSnapshot(body.snapshot,studioScopeSchema.parse(body.scope),studioRequestSchema.shape.brand.parse(body.brand));
+      else if(req.method==='POST'&&path==='/api/studio/intake-batch')result=new StudioOperations(studio).intakeBatchToOrder(body.snapshot,studioScopeSchema.parse(body.scope),studioRequestSchema.shape.brand.parse(body.brand),body.orderId===undefined?undefined:z.uuid().parse(body.orderId));
       else if(req.method==='POST'&&path==='/api/studio/collect'){
         const scope=studioScopeSchema.parse(body.scope),brand=studioRequestSchema.shape.brand.parse(body.brand),url=new URL(z.string().max(2000).parse(body.url));
         if(url.protocol!=='https:'||url.search||url.hash||url.username||url.password||!/^\/products\/[^/]+\/?$/.test(url.pathname))throw Error('Use URL HTTPS de um produto Shopify sem parâmetros; alternativamente importe a ficha JSON.');
@@ -90,6 +92,9 @@ export function createApp(store: Store, port = 4318) {
         }
         else if(path==='/api/studio/operations')result=new StudioOperations(studio).overview(id,scope);
         else if(path==='/api/studio/connect-order')result=new StudioOperations(studio).connect(id,scope,body.orderId===undefined?undefined:z.uuid().parse(body.orderId));
+        else if(path==='/api/studio/sync-scope')result=new StudioOperations(studio).synchronizeScope(id,scope);
+        else if(path==='/api/studio/sync-effort')result=new StudioOperations(studio).synchronizeEffort(id,scope);
+        else if(path==='/api/studio/deliver-order')result=new StudioOperations(studio).deliverOrderPackage(id,scope);
         else if(path==='/api/studio/revise')result=studio.revise(id,scope,z.number().int().nonnegative().parse(body.revision),body.request);
         else if(path==='/api/studio/approve')result=studio.approve(id,scope,z.number().int().nonnegative().parse(body.revision),body.approval);
         else if(path==='/api/studio/cancel')result=studio.cancel(id,scope,z.number().int().nonnegative().parse(body.revision));
@@ -108,7 +113,7 @@ export function createApp(store: Store, port = 4318) {
       }
       else if (req.method === 'GET' && path === '/api/state') result = {
         fieldCase:existsSync(new URL('../artifacts/field-case-summary.json',import.meta.url))?JSON.parse(readFileSync(new URL('../artifacts/field-case-summary.json',import.meta.url),'utf8')):null,
-        orders: store.orders().map(o => ({ ...o, economics: economics(o), tasks: orderTasks(o) })), gates: service.readiness(), policy, formats: supportedFormats(), offers, recurringOffer,
+        orders: store.orders().map(o => ({ ...o, economics: economics(o), tasks: orderTasks(o), handoffs: orderHandoffLedger(store, o.id) })), gates: service.readiness(), policy, formats: supportedFormats(), offers, recurringOffer,
         coordination: store.orders().map(orderAssignment), team: agentContracts, business: businessContext,
         messages: store.db.prepare('SELECT * FROM outbox ORDER BY created_at DESC LIMIT 100').all(),
         inbox: store.db.prepare('SELECT * FROM inbox ORDER BY received_at DESC LIMIT 100').all(),
@@ -134,17 +139,29 @@ export function createApp(store: Store, port = 4318) {
           case 'demoDelivery': assert(o.demo, 'Entrega simulada somente em demonstração.'); result = service.delivered(id, o.deliveryId!); store.audit(id, 'DELIVERY-01', 'simulated_delivery_no_email'); break;
           case 'demoClose': assert(o.demo && o.deliveredAt, 'Encerramento simulado somente após entrega demonstrativa.');
             assert(o.status === 'delivered', 'Pedido não está na janela de ajustes.');
-            o.status = 'closed'; o.closedAt = new Date().toISOString(); store.save(o); store.audit(id, 'DELIVERY-01', 'simulated_adjustment_window_elapsed'); result = o; break;
+            o.status = 'closed'; o.closedAt = new Date().toISOString(); store.save(o);
+            if(o.offer){const expected={orderId:id,revision:o.revision,service:o.offer.kind};recordHandoff(store,'coordinator',{...expected,evidence:[o.closedAt],pending:[],next:'Encerramento simulado sem aceite presumido',owner:'Coordenação'},expected);}
+            store.audit(id, 'DELIVERY-01', 'simulated_adjustment_window_elapsed'); result = o; break;
           case 'process': result = await service.process(id); break;
           case 'checkout': assert(!o.offer,'Oferta brasileira em validação: cobrança desativada.'); result = await new Payments(store).checkout(id); break;
           case 'cancel': result = service.cancel(id); break;
           case 'refund': result = await new Payments(store).refund(id); break;
-          case 'revisionApprove': assert(o.status === 'revision_approval', 'Revisão indisponível.'); o.scopeApproved = true; o.status = 'queued'; store.save(o); store.audit(id, 'SCOPE-01', 'revision_approved'); result = o; break;
+          case 'revisionApprove': result = service.approveRevision(id); break;
+          case 'reconcileImport': result = service.reconcileImport(id, z.string().min(1).parse(body.exportedCsv), z.boolean().default(false).parse(body.promoteGate)); break;
+          case 'preSaleHandoff': result = recordPreSaleHandoffs(store, id, z.object({ fit: z.enum(['qualified','unverified','declined']), sources: z.array(z.url()).min(1), need: z.string().min(1), buyer: z.string().min(1), scope: z.string().min(1), evidence: z.array(z.string().min(1)).optional() }).parse(body)); break;
           case 'accept': assert(o.status === 'delivered' && body.evidence, 'Registre a evidência do aceite.'); o.acceptedAt = new Date().toISOString(); store.save(o); store.audit(id, 'DELIVERY-01', 'client_acceptance_recorded', { evidence: String(body.evidence).slice(0, 1000) }); result = o; break;
-          case 'economics': o.hours = z.number().finite().nonnegative().parse(body.hours); o.fees = z.number().finite().nonnegative().parse(body.fees); o.costs = z.number().finite().nonnegative().parse(body.costs);
-            if(o.offer)o.taxes=z.number().finite().nonnegative().parse(body.taxes);
-            o.economicsNote = z.string().min(10).max(2000).parse(body.note); o.economicsRecordedAt = new Date().toISOString();
-            store.save(o); store.audit(id, 'PAY-01', 'economics_recorded', { hours: o.hours, fees: o.fees, costs: o.costs, note: o.economicsNote, simulated: o.demo || o.paymentMode === 'test' }); result = o; break;
+          case 'economics': {
+            const stageHoursSchema = z.partialRecord(z.enum(['intake','plan','production','quality','delivery','adjustments']), z.number().finite().nonnegative()).optional();
+            result = service.recordEconomics(id, {
+              hours: body.hours !== undefined ? z.number().finite().nonnegative().parse(body.hours) : undefined,
+              stageHours: stageHoursSchema.parse(body.stageHours),
+              fees: z.number().finite().nonnegative().parse(body.fees),
+              costs: z.number().finite().nonnegative().parse(body.costs),
+              taxes: o.offer ? z.number().finite().nonnegative().parse(body.taxes) : undefined,
+              note: z.string().min(10).max(2000).parse(body.note),
+            });
+            break;
+          }
           default: throw new Error('Ação desconhecida.');
         }
       } else if (req.method === 'POST' && path === '/api/revise') result = await service.revise(z.string().parse(body.id), Buffer.from(z.string().parse(body.data), 'base64'), z.string().parse(body.filename), mappingSchema.parse(body.mapping),z.enum(['scope-adjustment','defect']).default('scope-adjustment').parse(body.reason));

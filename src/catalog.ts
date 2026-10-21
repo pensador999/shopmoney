@@ -160,3 +160,72 @@ export function qualityCheck(source: Row[], output: Row[], m: Mapping): Issue[] 
   if (seen.size !== source.length) add(0, 'Variantes ausentes.');
   return issues;
 }
+
+export function reconcileShopifyExport(generatedCsv: string | Buffer, exportedCsv: string | Buffer) {
+  const genText = Buffer.isBuffer(generatedCsv) ? generatedCsv.toString('utf8') : generatedCsv;
+  const expText = Buffer.isBuffer(exportedCsv) ? exportedCsv.toString('utf8') : exportedCsv;
+  const genRows = parse(genText, { columns: true, bom: true, skip_empty_lines: true }) as Row[];
+  const expRows = parse(expText, { columns: true, bom: true, skip_empty_lines: true }) as Row[];
+  const issues: Issue[] = [];
+  const add = (row: number, code: string, message: string) => issues.push({ row: row + 2, code, message });
+  const getSku = (r: Row) => (r.SKU ?? r['Variant SKU'] ?? '').trim();
+  const getHandle = (r: Row) => (r['URL handle'] ?? r.Handle ?? '').trim();
+  const getPrice = (r: Row) => (r.Price ?? r['Variant Price'] ?? '').trim();
+  const getBarcode = (r: Row) => (r.Barcodes ?? r['Variant Barcode'] ?? '').trim().replace(/^'/, '');
+  const getStatus = (r: Row) => (r.Status ?? '').trim().toLowerCase();
+  const expBySku = new Map<string, { row: Row; index: number }>();
+  for (let i = 0; i < expRows.length; i++) {
+    const sku = getSku(expRows[i]);
+    if (!sku) continue;
+    if (expBySku.has(sku)) add(i, 'DUPLICATE_EXPORT_SKU', `SKU duplicado na exportação da loja: ${sku}`);
+    else expBySku.set(sku, { row: expRows[i], index: i });
+  }
+  const handles = new Set<string>();
+  let matchedSkus = 0;
+  genRows.forEach((gen, i) => {
+    const sku = getSku(gen);
+    const handle = getHandle(gen);
+    if (handle) handles.add(handle);
+    const found = expBySku.get(sku);
+    if (!found) {
+      add(i, 'MISSING_SKU', `SKU gerado não encontrado na exportação pós-importação: ${sku}`);
+      return;
+    }
+    matchedSkus++;
+    const exp = found.row;
+    if (getHandle(exp) !== handle) add(i, 'HANDLE_MISMATCH', `Handle divergente para o SKU ${sku}: esperado ${handle}, exportado ${getHandle(exp)}`);
+    const pGen = Number(getPrice(gen)), pExp = Number(getPrice(exp));
+    if (!Number.isFinite(pGen) || !Number.isFinite(pExp) || Math.round(pGen * 100) !== Math.round(pExp * 100)) {
+      add(i, 'PRICE_MISMATCH', `Preço divergente para o SKU ${sku}: esperado ${getPrice(gen)}, exportado ${getPrice(exp)}`);
+    }
+    if (getBarcode(gen) !== getBarcode(exp)) {
+      add(i, 'BARCODE_MISMATCH', `Código de barras/zeros à esquerda divergentes para o SKU ${sku}: esperado ${getBarcode(gen)}, exportado ${getBarcode(exp)}`);
+    }
+    if (gen.Status && getStatus(exp) && getStatus(exp) !== gen.Status.toLowerCase()) {
+      add(i, 'UNEXPECTED_STATUS', `Status divergente para o SKU ${sku}: esperado ${gen.Status}, exportado ${getStatus(exp)}`);
+    }
+    for (let opt = 1; opt <= 3; opt++) {
+      const expectedVal = (gen[`Option${opt} value`] ?? '').trim();
+      const exportedVal = (exp[`Option${opt} value`] ?? exp[`Option${opt} Value`] ?? '').trim();
+      if (expectedVal !== exportedVal) {
+        add(i, 'OPTION_MISMATCH', `Opção ${opt} divergente para o SKU ${sku}: esperado "${expectedVal}", exportado "${exportedVal}"`);
+      }
+    }
+  });
+  const evidenceHash = hash(JSON.stringify({
+    generatedSha256: hash(genText),
+    exportedSha256: hash(expText),
+    productCount: handles.size,
+    variantCount: genRows.length,
+    matchedSkus,
+    issueCount: issues.length,
+  }));
+  return {
+    ok: issues.length === 0 && genRows.length > 0 && matchedSkus === genRows.length,
+    productCount: handles.size,
+    variantCount: genRows.length,
+    matchedSkus,
+    issues,
+    evidenceHash,
+  };
+}

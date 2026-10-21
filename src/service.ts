@@ -2,13 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import AdmZip from 'adm-zip';
 import { Store, type Order } from './store.ts';
-import { mappingSchema, readTable, inspect, transform, qualityCheck, csv, HEADERS, hash, productHandle, type Mapping } from './catalog.ts';
+import { mappingSchema, readTable, inspect, transform, qualityCheck, reconcileShopifyExport, csv, HEADERS, hash, productHandle, type Mapping } from './catalog.ts';
 import { policy, assert, businessDays } from './policy.ts';
 import { adaptSupplier, supplierProfileSchema, type SupplierProfile } from './supplier-adapter.ts';
-import { offerSnapshot, type ServiceKind } from './offers.ts';
+import { offerSnapshot, type ServiceKind, type OperationalStage } from './offers.ts';
 import { contentRequestSchema, prepareContent, checkContent } from './brand-content.ts';
 import { processEditorial } from './service-editorial.ts';
-import { validateHandoff } from './handoffs.ts';
+import { recordHandoff } from './handoffs.ts';
+import { applyOrderEconomics } from './order-workflow.ts';
+import { ContentStudio } from './content-studio/service.ts';
+import { StudioOperations } from './content-studio/operations.ts';
 
 export const gateNames = ['identity', 'mailbox', 'stripeAccount', 'usdPayment', 'bankPayout', 'shopifyImport', 'terms'] as const;
 export class Service {
@@ -52,14 +55,32 @@ export class Service {
   }
   approve(id: string) {
     const o = this.store.get(id); assert(o.status === 'scoped', 'Resolva as pendências antes de aprovar o escopo.');
-    if(o.offer){const contract=validateHandoff('planner',{orderId:id,revision:o.revision,service:o.offer.kind,evidence:[hash(this.store.artifact(id,'original'))],pending:[],mappingHash:hash(JSON.stringify(o.mapping)),brandVersion:(o.brandProfile as any)?.version??'not-applicable',operatorApproval:true},{orderId:id,revision:o.revision,service:o.offer.kind});this.store.artifact(id,`planner-${o.revision}.json`,JSON.stringify(contract));}
+    if(o.offer){
+      const expected={orderId:id,revision:o.revision,service:o.offer.kind};
+      const origHash=hash(this.store.artifact(id,'original'));
+      recordHandoff(this.store,'support',{...expected,evidence:[origHash],pending:[],materials:[o.filename],questions:[]},expected);
+      recordHandoff(this.store,'planner',{...expected,evidence:[origHash],pending:[],mappingHash:hash(JSON.stringify(o.mapping)),brandVersion:(o.brandProfile as any)?.version??'not-applicable',operatorApproval:true},expected);
+    }
     o.scopeApproved = true; o.status = 'awaiting_payment'; this.store.save(o); this.store.audit(id, policy.rules.scope, 'scope_approved', { mapping: o.mapping, profile: o.supplierProfile, actor: 'local_operator' }); return o;
+  }
+  approveRevision(id: string) {
+    const o = this.store.get(id); assert(o.status === 'revision_approval', 'Revisão indisponível.');
+    if(o.offer){
+      const expected={orderId:id,revision:o.revision,service:o.offer.kind};
+      const origHash=hash(this.store.artifact(id,'original'));
+      recordHandoff(this.store,'support',{...expected,evidence:[origHash],pending:[],materials:[o.filename],questions:[]},expected);
+      recordHandoff(this.store,'planner',{...expected,evidence:[origHash],pending:[],mappingHash:hash(JSON.stringify(o.mapping)),brandVersion:(o.brandProfile as any)?.version??'not-applicable',operatorApproval:true},expected);
+    }
+    o.scopeApproved = true; o.status = 'queued'; this.store.save(o); this.store.audit(id, policy.rules.scope, 'revision_approved'); return o;
   }
   simulatePayment(id: string) {
     const o = this.store.get(id); assert(o.demo, 'Simulação somente para pedidos demonstrativos.');
     assert(o.status === 'awaiting_payment', 'Pedido não está aguardando pagamento.');
     o.status = 'queued'; o.dueAt = businessDays(new Date(), o.offer?.days ?? 3); o.receipt = 'DEMO-NO-MONEY'; this.store.save(o);
-    if(o.offer)this.store.artifact(id,`finance-${o.revision}.json`,JSON.stringify(validateHandoff('finance',{orderId:id,revision:o.revision,service:o.offer.kind,evidence:['DEMO-NO-MONEY'],pending:[],confirmation:'simulated',amountCents:o.amount,currency:o.currency},{orderId:id,revision:o.revision,service:o.offer.kind})));
+    if(o.offer){
+      const expected={orderId:id,revision:o.revision,service:o.offer.kind};
+      recordHandoff(this.store,'finance',{...expected,evidence:['DEMO-NO-MONEY'],pending:[],confirmation:'simulated',amountCents:o.amount,currency:o.currency},expected);
+    }
     this.store.audit(id, policy.rules.payment, 'demo_payment'); return o;
   }
   async process(id: string) {
@@ -70,7 +91,13 @@ export class Service {
       assert((o.productionAttempts ?? 0) < 3, 'Limite de execução atingido; revisão humana necessária.');
       o.productionAttempts = (o.productionAttempts ?? 0) + 1;
       o.status = 'running'; this.store.save(o);
-      if(o.offer&&['content','diagnostic'].includes(o.offer.kind)) return processEditorial(this.store,o);
+      if(o.offer&&['content','diagnostic'].includes(o.offer.kind)){
+        if(o.offer.kind==='content'&&!this.store.db.prepare('SELECT 1 FROM artifacts WHERE order_id=? AND name=?').get(id,`brief-${o.revision}.json`)&&this.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='studio_order_links'").get()){
+          const linked=this.store.db.prepare('SELECT s.id,s.workspace_id,s.client_id,s.store_id FROM studio_order_links l JOIN content_studios s ON s.id=l.studio_id WHERE l.order_id=? LIMIT 1').get(id) as any;
+          if(linked){new StudioOperations(new ContentStudio(this.store)).deliverOrderPackage(linked.id,{workspaceId:linked.workspace_id,clientId:linked.client_id,storeId:linked.store_id});return this.store.get(id);}
+        }
+        return processEditorial(this.store,o);
+      }
       const rows = JSON.parse(this.store.artifact(id, `source-${o.revision}.json`).toString());
       const output = transform(rows, o.mapping), qa = qualityCheck(rows, output, o.mapping);
       assert(!qa.length, `Falha de qualidade: ${JSON.stringify(qa)}`);
@@ -96,8 +123,8 @@ export class Service {
       zip.addFile('IMPORT-INSTRUCTIONS.txt', Buffer.from(instructions));
       if(o.offer){
         const base={orderId:id,revision:o.revision,service:o.offer.kind,evidence:[manifest.outputSha256],pending:[]};
-        this.store.artifact(id,`production-${o.revision}.json`,JSON.stringify(validateHandoff('production',{...base,artifacts:[`shopify-${o.revision}.csv`],manifestHash:hash(JSON.stringify(manifest))},base)));
-        this.store.artifact(id,`quality-${o.revision}.json`,JSON.stringify(validateHandoff('quality',{...base,passed:true,checks:['Fonte versus saída','Identificadores','Variantes','Preços'],executor:'independent-code'},base)));
+        recordHandoff(this.store,'production',{...base,artifacts:[`shopify-${o.revision}.csv`],manifestHash:hash(JSON.stringify(manifest))},base);
+        recordHandoff(this.store,'quality',{...base,passed:true,checks:['Fonte versus saída','Identificadores','Variantes','Preços'],executor:'independent-code'},base);
       }
       this.store.transaction(() => {
         this.store.artifact(id, `shopify-${o.revision}.csv`, content);
@@ -118,7 +145,49 @@ export class Service {
   delivered(id: string, messageId: string) {
     const o = this.store.get(id); if (o.status === 'delivered') return o;
     assert(o.status === 'ready' && o.deliveryId === messageId, 'Entrega inválida.');
-    o.status = 'delivered'; o.deliveredAt = new Date().toISOString(); this.store.save(o); this.store.audit(id, policy.rules.delivery, 'delivered', { messageId }); return o;
+    o.status = 'delivered'; o.deliveredAt = new Date().toISOString(); this.store.save(o);
+    if(o.offer){
+      const expected={orderId:id,revision:o.revision,service:o.offer.kind};
+      recordHandoff(this.store,'support',{...expected,evidence:[messageId],pending:[],materials:[o.filename,`delivery-${o.revision}.zip`],questions:[]},expected);
+    }
+    this.store.audit(id, policy.rules.delivery, 'delivered', { messageId }); return o;
+  }
+  reconcileImport(id: string, exportedCsv: Buffer | string, promoteGate = false) {
+    return this.store.transaction(() => {
+      const o = this.store.get(id);
+      assert(['ready', 'delivered', 'closed'].includes(o.status), 'Conciliação pós-importação exige pacote pronto.');
+      const generatedCsv = this.store.artifact(id, `shopify-${o.revision}.csv`);
+      const reconciliation = reconcileShopifyExport(generatedCsv, exportedCsv);
+      this.store.db.prepare('INSERT INTO artifacts VALUES(?,?,?) ON CONFLICT(order_id,name) DO UPDATE SET data=excluded.data').run(id, `reconciliation-${o.revision}.json`, Buffer.from(JSON.stringify(reconciliation, null, 2)));
+      this.store.audit(id, policy.rules.quality, reconciliation.ok ? 'shopify_import_reconciled' : 'shopify_import_diverged', { revision: o.revision, ...reconciliation });
+      if (promoteGate) {
+        assert(reconciliation.ok, 'Gate shopifyImport bloqueado: exportação da loja apresenta divergências.');
+        const gates = this.store.setting<Record<string, string>>('gates', {});
+        gates.shopifyImport = `Conciliação determinística aprovada no pedido ${id} r${o.revision} (${reconciliation.matchedSkus} variantes; hash ${reconciliation.evidenceHash})`;
+        this.store.set('gates', gates);
+        this.store.audit(id, policy.rules.scope, 'gate_evidence', { name: 'shopifyImport', evidence: gates.shopifyImport });
+      }
+      return reconciliation;
+    });
+  }
+  recordEconomics(id: string, input: { hours?: number; stageHours?: Partial<Record<OperationalStage, number>>; fees: number; costs: number; taxes?: number; note: string }) {
+    return this.store.transaction(() => {
+      const o = this.store.get(id);
+      const summary = applyOrderEconomics(o, input);
+      this.store.save(o);
+      if (o.offer) {
+        const expected = { orderId: id, revision: o.revision, service: o.offer.kind };
+        recordHandoff(this.store, 'coordinator', {
+          ...expected,
+          evidence: [o.economicsRecordedAt!],
+          pending: [],
+          next: o.status === 'closed' ? 'Pedido encerrado com custos e contribuição apurados' : 'Acompanhar janela de ajustes e margem do lote',
+          owner: 'Coordenação',
+        }, expected);
+      }
+      this.store.audit(id, policy.rules.payment, 'economics_recorded', { hours: o.hours, stageHours: o.stageHours ?? {}, fees: o.fees, costs: o.costs, taxes: o.taxes ?? null, budgetAlert: summary.budgetAlert, note: o.economicsNote, simulated: o.demo || o.paymentMode === 'test' });
+      return o;
+    });
   }
   async revise(id: string, data: Buffer, filename: string, mapping: Mapping, reason:'scope-adjustment'|'defect'='scope-adjustment') {
     const o = this.store.get(id);
@@ -163,7 +232,12 @@ export class Service {
   }
   closeExpired(now = Date.now()) {
     for (const o of this.store.orders()) if (o.status === 'delivered' && o.deliveredAt && now >= Date.parse(o.deliveredAt) + 7 * 86400000) {
-      o.status = 'closed'; o.closedAt = new Date(now).toISOString(); this.store.save(o); this.store.audit(o.id, policy.rules.delivery, 'administratively_closed_without_implied_acceptance');
+      o.status = 'closed'; o.closedAt = new Date(now).toISOString(); this.store.save(o);
+      if (o.offer) {
+        const expected = { orderId: o.id, revision: o.revision, service: o.offer.kind };
+        recordHandoff(this.store, 'coordinator', { ...expected, evidence: [o.closedAt], pending: [], next: 'Janela de ajustes encerrada sem aceite presumido', owner: 'Coordenação' }, expected);
+      }
+      this.store.audit(o.id, policy.rules.delivery, 'administratively_closed_without_implied_acceptance');
     }
   }
 }
