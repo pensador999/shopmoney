@@ -1,38 +1,26 @@
-# Estado do projeto — 16/10/2026
+# Atualização Brasil — 19/10/2026
 
-Atualização técnica 17/10: ler [liberação Vercel](LIBERACAO_VERCEL.md). Supabase acessível, 12 tabelas e bucket privado criados, testes de fila remota passaram. Painel recebeu quadro de responsáveis e análises vinculadas ao pedido; 28 testes locais passaram. Aplicativo ainda usa SQLite; não há login nem executor remoto conectado. Essa atualização substitui os bloqueios antigos de acesso mencionados em documentos anteriores.
+Prevalecem [BRASIL.md](BRASIL.md) e [IMPLEMENTACAO_BRASIL.md](IMPLEMENTACAO_BRASIL.md). Quatro serviços sintéticos completos localmente; oito papéis com respostas controladas, sem novo teste semântico Eve. Perfis/contratos/revisões/custos e aprendizado por cliente implementados. Migração e RLS reais pendentes por indisponibilidade da revisão automática; ponte testada somente em fixture. Não declarar operação integrada.
 
-## Objetivo comercial
+# Estado vigente do projeto — 19/10/2026
 
-Preparação e conferência de catálogos de fornecedores para pequenas agências Shopify dos EUA. Hipótese inicial: US$149 por um fornecedor, até 50 produtos e 500 variantes, ambos os limites aplicáveis; produtos novos em rascunho. A agência importa o pacote. Preço e demanda ainda não comprovados por vendas.
+## Copiloto interno supervisionado
 
-Margem de contribuição proposta: recebimento líquido menos taxas, custos variáveis e todas as horas a US$25/h. Não confundir demonstração com receita nem contribuição com lucro contábil. Recorrência de US$399/mês só será avaliada após dois pilotos satisfatórios e necessidade repetida.
+Mapa dos oito papéis e relatório de prontidão implementados no painel local. A fonte de responsabilidades, conexões e pendências é src/workflow.ts; relatório gerado em [PRONTIDAO_COPILOTO.md](PRONTIDAO_COPILOTO.md). Não são oito processos autônomos: Eve atende sessões consultivas; produção/QA são código.
 
-## Evidências locais existentes
+## Confirmado
 
-- Entrada CSV/XLSX, perfis pai/variante, originais preservados, conferência e pacote ZIP.
-- Persistência SQLite, etapas por responsável, auditoria, interrupção e retomada.
-- Painel em português, simulação de pagamento, entrega e encerramento.
-- Biblioteca de cabeçalhos Bling 59, Sankhya 45 e saída Shopify; testes somente sintéticos.
-- Última execução registrada: 27 testes aprovados e verificação TypeScript sem erros. Isso não valida serviços externos.
-- Funções de agentes separadas; não há oito agentes autônomos operando comercialmente.
+- Login e vínculo administrador catanaops@gmail.com confirmados pelo titular.
+- Supabase aqkwbmggkvvfhqaivxlh: 13 tabelas em catanaops, workspace e bucket privado.
+- Leitura remota, isolamento por membership e acompanhamento com filtro explícito de workspace.
+- 33 testes locais aprovados, TypeScript aprovado. Teste SQL de acompanhamento com 125 tarefas e dois workspaces, rollback das fixtures.
+- Interface verificada com API simulada, incluindo abas, teclado, cancelamento, QA, logout e viewport de 390px. Consulta real sem login rejeitada com401.
+- Gmail IMAP real e deduplicação testados em banco isolado; SMTP Auth configurado. Envio operacional permanece desativado.
 
-## Integrações e identidade
+## Falta integrar
 
-- Nome operacional: Catana Ops. Repositório: Shopmoney. Aplicação: catalog-ops.
-- Email informado pelo titular: catanaops@gmail.com; plugin Gmail instalado segundo o titular. Conexão do plugin e integração própria do aplicativo ainda não verificadas.
-- Gmail/Stripe/recepção pública e importação Shopify ainda precisam de configuração e testes externos.
-- Twilio não integra o escopo inicial e não foi autenticado por este trabalho.
-- Servidor local não equivale a hospedagem 24/7. Não houve publicação de infraestrutura.
+Escrita remota, originais/ZIP no Storage, executor consumindo a mesma fila, contratos especializados por função e roteamento correto de atendimento/comercial. UI nova autenticada com Supabase deve ser conferida pelo titular após atualizar e entrar novamente; não extraímos senha ou sessão do navegador.
 
-## Próximas entregas, em ordem
+O aplicativo de produção de catálogos continua SQLite/local. IA e processamento exigem computador/processos ativos. Não há hospedagem publicada, cobrança, campanha ou receita comprovada. Orçamento zero. Vercel e Stripe não bloqueiam o uso local assistido com dados sintéticos; seus critérios estão em [LIBERACAO_VERCEL.md](LIBERACAO_VERCEL.md).
 
-1. Conectar a caixa dedicada ao aplicativo e testar recebimento e rascunhos; envio externo requer autorização específica.
-2. Configurar Stripe em sandbox; validar Checkout, webhook, conciliação e isolamento de produção.
-3. Importar amostra sintética em loja Shopify de teste e registrar resultado.
-4. Finalizar identidade, termos, capacidade e custos; decidir infraestrutura mínima após validar integrações.
-5. Autorizar explicitamente campanha antes de qualquer contato comercial. Medir dois pilotos independentes e uma recompra antes de ampliar.
-
-## Limites vigentes
-
-Continuar validação local. Não enviar contatos, cobrar clientes, publicar em lojas reais, contratar serviços ou comprar créditos automaticamente. Falta de acesso, cota ou regra suspende a etapa e gera pendência. Dados e materiais BRK não fazem parte deste repositório; somente a estrutura autorizada e referências técnicas são reutilizadas.
+Oferta piloto atual é hipótese de US$149, um fornecedor, até50 produtos e500 variantes, novos rascunhos. Propostas de outros preços/assinatura no plano diretor não foram ativadas. Histórico detalhado em [RETOMADA.md](../RETOMADA.md).

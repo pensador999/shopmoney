@@ -1,0 +1,7 @@
+import type { Order } from './store.ts';
+import { displayMoney, offers } from './offers.ts';
+export function proposalCopy(o:Order,url:string){
+  if(!o.offer)return `Historical catalog pilot — ${displayMoney(o.amount,o.currency)}. One supplier, up to 50 products / 500 variants. Client imports. Three business days after payment and complete data. One scope adjustment within seven days. Reference: ${o.id}\n${url}`;
+  return `${o.offer.name} — ${displayMoney(o.amount,o.currency)}. Versão ${o.offer.version}. Até ${o.offer.maxProducts} produtos pais; ${o.offer.maxVariants} variantes quando aplicável. ${o.offer.days} dias úteis após pagamento confirmado e materiais completos. Cliente importa/publica. Uma rodada de ajustes em sete dias; defeitos não consomem a rodada. Sem promessa de SEO/conversão. Cancelamento antes da execução: reembolso integral. Falha nossa não corrigida no prazo acordado: reembolso conforme termos aceitos. Referência ${o.id}\n${url}`;
+}
+export function outreachCopy(name:string,source:string,footer:string){return `Olá, ${name}. Encontrei sua loja em ${source}. A Catana Ops prepara catálogo e conteúdo para marcas de vestuário Shopify, com regras por marca e conferência. Serviços em teste: diagnóstico ${displayMoney(offers.diagnostic.cents)}, conteúdo ${displayMoney(offers.content.cents)} e cadastro ${displayMoney(offers.catalog.cents)}. O cliente importa e publica. Podemos avaliar um próximo lote? Não presumimos que sua loja tenha um problema. ${footer}`;}

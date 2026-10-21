@@ -6,7 +6,7 @@ export function orderTasks(o: Order) {
     ['intake','Atendimento','Arquivo completo e pendências resolvidas', 'SCOPE-01', !!o.report?.ok, !o.report?.ok],
     ['plan','Planejamento','Mapeamento aprovado e rastreável', 'SCOPE-01', o.scopeApproved, o.status === 'scoped' || o.status === 'revision_approval'],
     ['payment','Financeiro','Pagamento confirmado pelo processador ou simulação identificada', 'PAY-01', !!o.receipt, o.status === 'awaiting_payment'],
-    ['production','Produção','CSV e pacote gerados', 'DATA-01', ['ready','delivered','closed'].includes(o.status), ['queued','running'].includes(o.status)],
+    ['production','Produção',o.offer?.kind==='diagnostic'?'Diagnóstico com evidências':o.offer?.kind==='content'?'Conteúdo aprovado por identificador':'CSV e pacote gerados', 'DATA-01', ['ready','delivered','closed'].includes(o.status), ['queued','running'].includes(o.status)],
     ['quality','Qualidade','Conferência independente sem divergências', 'QA-01', !!o.qa && ['ready','delivered','closed'].includes(o.status), o.status === 'needs_attention'],
     ['delivery','Atendimento','Entrega registrada, sem aceite presumido', 'DELIVERY-01', ['delivered','closed'].includes(o.status), o.status === 'ready'],
     ['economics','Financeiro','Horas, taxas e custos registrados', 'PAY-01', !!o.economicsRecordedAt, !!o.deliveredAt],
@@ -27,13 +27,17 @@ export function orderTasks(o: Order) {
 
 export function economics(o: Order) {
   const excluded = ['cancelled','refund_pending','refunded'].includes(o.status);
-  const complete = !!o.economicsRecordedAt;
+  const complete = !!o.economicsRecordedAt && (!o.offer || o.taxes !== undefined);
+  const laborRate = o.offer?.laborRate ?? 25;
   const simulated = o.demo || o.paymentMode === 'test';
   const paid = !!o.receipt && (simulated || o.paymentMode === 'live');
+  const contribution=!excluded&&complete&&paid?Math.round((o.amount/100-o.fees-o.costs-(o.offer?(o.taxes??0):0)-o.hours*laborRate)*100)/100:null;
   return {
     complete, simulated, currency: o.currency,
     state: excluded ? 'excluded' : !complete ? 'costs_missing' : !paid ? 'payment_pending' : simulated ? 'hypothetical' : 'recorded',
-    contribution: !excluded && complete && paid ? Math.round((o.amount / 100 - o.fees - o.costs - o.hours * 25) * 100) / 100 : null,
-    laborRate: 25, excludes: 'Impostos e custos fixos; repasse bancário não confirmado por este cálculo.',
+    contribution, contributionRate:contribution!==null&&o.amount>0?contribution/(o.amount/100):null,
+    targetMet:contribution!==null&&o.offer?contribution/(o.amount/100)>=o.offer.targetContribution:null,
+    laborRate, target: o.offer?.targetContribution ?? null,
+    excludes: o.offer ? 'Custos fixos; repasse bancário não confirmado. Tributos exigem registro explícito.' : 'Impostos e custos fixos; cálculo histórico em USD.',
   };
 }

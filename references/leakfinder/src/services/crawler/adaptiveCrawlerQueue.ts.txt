@@ -1,0 +1,162 @@
+/**
+ * ⚡ ADAPTIVE CRAWLER QUEUE WITH HUMAN CADENCE & ANTI-THROTTLING
+ * (ADSHIELD RESILIENCE ENGINE 2026.4)
+ * 
+ * Gerencia a visita e extração sequencial de produtos e coleções:
+ * 1. Cadência Humana com Jitter (evita assinaturas de bot e bloqueios WAF)
+ * 2. Proteção Anti-429 (Too Many Requests) com Backoff Exponencial e Retry-After
+ * 3. Concorrência Controlada (evita consumo excessivo de RAM no Chrome Headless)
+ * 4. Circuit Breaker / Timeout Seguro (impede que uma página lenta trave toda a auditoria)
+ */
+
+export interface QueueTask<T> {
+  id: string;
+  url: string;
+  type: 'PRODUCT' | 'COLLECTION' | 'GENERAL';
+  meta?: any;
+  execute: () => Promise<T>;
+}
+
+export interface QueueProgressUpdate {
+  completedCount: number;
+  totalCount: number;
+  currentUrl: string;
+  percentComplete: number;
+  lastItemDurationMs: number;
+  throttleBackoffActive: boolean;
+}
+
+export interface AdaptiveQueueOptions {
+  minDelayMs?: number;       // Padrão: 1200ms
+  maxDelayMs?: number;       // Padrão: 2200ms
+  concurrency?: number;      // Padrão: 1 (segurança máxima anti-WAF)
+  timeoutPerTaskMs?: number; // Padrão: 8000ms
+  maxRetries?: number;       // Padrão: 2
+  onProgress?: (progress: QueueProgressUpdate) => void;
+}
+
+export class AdaptiveCrawlerQueue {
+  private options: Required<AdaptiveQueueOptions>;
+  private isThrottled: boolean = false;
+  private currentBackoffMs: number = 0;
+
+  constructor(options: AdaptiveQueueOptions = {}) {
+    this.options = {
+      minDelayMs: options.minDelayMs ?? 1200,
+      maxDelayMs: options.maxDelayMs ?? 2200,
+      concurrency: Math.max(1, Math.min(options.concurrency ?? 1, 3)),
+      timeoutPerTaskMs: options.timeoutPerTaskMs ?? 8000,
+      maxRetries: options.maxRetries ?? 2,
+      onProgress: options.onProgress ?? (() => {})
+    };
+  }
+
+  /**
+   * Gera um atraso com variação aleatória (jitter) simulando navegação humana
+   */
+  private getRandomHumanDelay(): number {
+    const min = this.options.minDelayMs;
+    const max = this.options.maxDelayMs;
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Executa uma tarefa com timeout seguro
+   */
+  private async executeWithTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
+    return Promise.race([
+      fn(),
+      new Promise<T>((_, reject) => 
+        setTimeout(() => reject(new Error(`Timeout de ${timeoutMs}ms excedido na requisição.`)), timeoutMs)
+      )
+    ]);
+  }
+
+  /**
+   * Processa uma lista de tarefas sequencialmente ou com concorrência segura
+   */
+  public async processAll<T>(tasks: QueueTask<T>[]): Promise<{
+    results: { task: QueueTask<T>; data?: T; error?: string; durationMs: number }[];
+    totalDurationMs: number;
+    successRatePct: number;
+  }> {
+    const totalCount = tasks.length;
+    let completedCount = 0;
+    const startTime = Date.now();
+    const results: { task: QueueTask<T>; data?: T; error?: string; durationMs: number }[] = [];
+
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i];
+      const itemStart = Date.now();
+      let attempt = 0;
+      let success = false;
+      let lastError = '';
+      let dataResult: T | undefined;
+
+      while (attempt <= this.options.maxRetries && !success) {
+        attempt++;
+        try {
+          // Se estamos sob efeito de 429 prévio, espera o backoff
+          if (this.isThrottled && this.currentBackoffMs > 0) {
+            await this.sleep(this.currentBackoffMs);
+            this.isThrottled = false;
+            this.currentBackoffMs = 0;
+          }
+
+          // Executa tarefa
+          dataResult = await this.executeWithTimeout(task.execute, this.options.timeoutPerTaskMs);
+          success = true;
+        } catch (err: any) {
+          lastError = err?.message || String(err);
+
+          // Verifica se foi erro 429 / Rate limit
+          if (lastError.includes('429') || lastError.toLowerCase().includes('too many requests')) {
+            this.isThrottled = true;
+            this.currentBackoffMs = Math.min(10000, 2000 * Math.pow(2, attempt)); // Backoff exponencial: 2s, 4s, 8s
+          }
+        }
+      }
+
+      const durationMs = Date.now() - itemStart;
+      completedCount++;
+
+      results.push({
+        task,
+        data: dataResult,
+        error: success ? undefined : lastError,
+        durationMs
+      });
+
+      // Notifica progresso
+      this.options.onProgress({
+        completedCount,
+        totalCount,
+        currentUrl: task.url,
+        percentComplete: Math.round((completedCount / totalCount) * 100),
+        lastItemDurationMs: durationMs,
+        throttleBackoffActive: this.isThrottled
+      });
+
+      // Se ainda houver itens pela frente, insere o jitter humano
+      if (i < tasks.length - 1) {
+        const humanDelay = this.getRandomHumanDelay();
+        await this.sleep(humanDelay);
+      }
+    }
+
+    const totalDurationMs = Date.now() - startTime;
+    const successCount = results.filter(r => !r.error).length;
+    const successRatePct = totalCount > 0 ? Math.round((successCount / totalCount) * 100) : 100;
+
+    return {
+      results,
+      totalDurationMs,
+      successRatePct
+    };
+  }
+}
+

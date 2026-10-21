@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Store } from './store.ts';
 import { Service } from './service.ts';
 import { assert, policy, businessDays } from './policy.ts';
+import { proposalCopy } from './commercial-copy.ts';
 
 export class Payments {
   store: Store; stripe: Stripe; live: boolean;
@@ -16,6 +17,7 @@ export class Payments {
     const owner = randomUUID(); assert(this.store.acquire('checkout', owner), 'Cobrança em preparação.');
     try {
       const o = this.store.get(id);
+      assert(!o.offer||o.offer.commercialEnabled,'Oferta brasileira em validação: cobrança bloqueada.');
       assert(!o.demo && o.scopeApproved && o.status === 'awaiting_payment', 'Pedido não pode ser cobrado.');
       assert(!this.store.setting('aiPaused', false), 'Capacidade de IA indisponível; novas cobranças suspensas.');
       if (this.live) {
@@ -34,7 +36,7 @@ export class Payments {
       assert(publicUrl && publicUrl.startsWith('https://'), 'Configure PUBLIC_URL do receptor de pagamentos.');
       const session = await this.stripe.checkout.sessions.create({
         mode: 'payment', customer_email: client.email,
-        line_items: [{ price_data: { currency: o.currency, unit_amount: o.amount, product_data: { name: 'Shopify supplier catalog pilot', description: 'One supplier, up to 50 products and 500 variants; draft files only.' } }, quantity: 1 }],
+        line_items: [{ price_data: { currency: o.currency, unit_amount: o.amount, product_data: { name: o.offer?.name??'Historical Shopify catalog pilot', description: 'Escopo e versão registrados no pedido; cliente realiza a aplicação.' } }, quantity: 1 }],
         success_url: `${publicUrl}/payment-return`, cancel_url: `${publicUrl}/payment-return`,
         client_reference_id: o.id, metadata: { order_id: o.id },
         integration_identifier: 'catalog_ops_pilot_qkzmxnva',
@@ -42,7 +44,7 @@ export class Payments {
       o.checkoutId = session.id; o.checkoutUrl = session.url ?? undefined; this.store.save(o);
       o.paymentMode = this.live ? 'live' : 'test'; this.store.save(o);
       this.store.audit(id, policy.rules.payment, 'checkout_created', { checkoutId: session.id, live: this.live });
-      this.store.enqueue(`proposal-${id}`, id, client.email, 'proposal', `Catalog pilot proposal — ${id}`, `Scope: one supplier file, up to 50 products and 500 variants, new draft products only. Price: USD 149. Delivery: three business days after cleared payment and complete data. One scope adjustment within seven calendar days. No store access or publication. Cancel before execution for a full refund. If we cannot correct our delivery failure within the agreed deadline, you may request a refund. Please review and accept these terms before paying: ${session.url}\nReference: ${id}`);
+      this.store.enqueue(`proposal-${id}`, id, client.email, 'proposal', `Catana Ops — proposta ${id}`, proposalCopy(o,session.url??''));
       return { url: session.url };
     } finally { this.store.release('checkout', owner); }
   }

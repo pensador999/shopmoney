@@ -72,7 +72,7 @@ export function inspect(rows: Row[], input: Mapping) {
   const issues: Issue[] = [];
   const issue = (row: number, code: string, message: string) => issues.push({ row: row + 2, code, message });
   const required = [mapping.productId, mapping.title, mapping.sku, mapping.price, ...mapping.options.map(o => o.column), mapping.barcode, mapping.vendor, mapping.description, mapping.imageUrl].filter(Boolean) as string[];
-  if (!rows.length || rows.length > policy.maxVariants) issue(0, 'SCOPE', 'Envie entre 1 e 500 variantes.');
+  if (!rows.length || rows.length > 500) issue(0, 'SCOPE', 'Envie entre 1 e 500 variantes.');
   for (const col of required) if (!rows[0] || !Object.hasOwn(rows[0], col)) issue(0, 'COLUMN', `Coluna ausente: ${col}`);
   const skus = new Set<string>(), products = new Map<string, Row[]>(), options = new Set<string>();
   rows.forEach((r, i) => {
@@ -89,7 +89,7 @@ export function inspect(rows: Row[], input: Mapping) {
     }
     const price = normalizedPrice(r[mapping.price] ?? '', mapping);
     if (mapping.priceDecimalSeparator === ',' && !r[mapping.price]?.startsWith('\u0000NUMBER:') && r[mapping.price]?.includes('.')) issue(i, 'PRICE', 'Perfil exige vírgula decimal, sem separador de milhar.');
-    if (!/^\d+(\.\d{1,2})?$/.test(price)) issue(i, 'PRICE', 'Preço deve usar ponto decimal, sem símbolo ou separador de milhar.');
+    if (!/^\d+(\.\d{1,2})?$/.test(price)) issue(i, 'PRICE', `Preço deve usar ${mapping.priceDecimalSeparator === ',' ? 'vírgula' : 'ponto'} decimal, sem símbolo ou separador de milhar.`);
     if (mapping.barcode && r[mapping.barcode] && !/^\d+$/.test(r[mapping.barcode])) issue(i, 'BARCODE', 'Este piloto aceita um código de barras numérico por variante.');
     const sku = r[mapping.sku];
     if (skus.has(sku)) issue(i, 'DUPLICATE_SKU', `SKU repetido: ${sku}`);
@@ -102,7 +102,7 @@ export function inspect(rows: Row[], input: Mapping) {
     if (options.has(key)) issue(i, 'DUPLICATE_VARIANT', 'Combinação de opções repetida ou produto sem opções definidas.');
     options.add(key);
   });
-  if (products.size > policy.maxProducts) issue(0, 'SCOPE', 'Mais de 50 produtos.');
+  if (products.size > 50) issue(0, 'SCOPE', 'Mais de 50 produtos.');
   if (new Set(mapping.options.map(o => o.name)).size !== mapping.options.length) issue(0, 'OPTIONS', 'Nomes das opções duplicados.');
   return { ok: !issues.length, issues, productCount: products.size, variantCount: rows.length };
 }

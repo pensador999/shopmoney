@@ -1,3 +1,7 @@
+# Política vigente — Brasil br-2026-10-19.1
+
+Para novos pedidos prevalecem src/offers.ts, src/policy.ts e docs/BRASIL.md. Lojas brasileiras de vestuário Shopify, cliente aplica, serviços modulares BRL, referência R$60/h e meta de contribuição 40%. Imagens, assinatura, contatos e cobrança permanecem bloqueados. Pedidos históricos conservam oferta/moeda contratadas. As seções anteriores abaixo são histórico; não substituir a oferta brasileira por USD149.
+
 # Políticas operacionais — 2026-10-15.1
 
 Estas regras são aplicadas pelo código. A IA não pode ampliá-las.

@@ -1,5 +1,7 @@
+import {StudioOperations} from './content-studio/operations.ts';
+import {collectProductPages} from './inspection/collector.ts';
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync,existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { Store } from './store.ts';
@@ -17,16 +19,39 @@ import { economics, orderTasks } from './order-workflow.ts';
 import { supportedFormats } from './formats.ts';
 import { businessContext, agentContracts } from './business-context.ts';
 import { orderAssignment, orderAgentRequest } from './coordination.ts';
+import { offers, recurringOffer } from './offers.ts';
+import { createEditorial, reviseEditorial } from './service-editorial.ts';
+import { proposeLearning, reviewLearning } from './learning.ts';
+import { ContentStudio } from './content-studio/service.ts';
+import { studioScopeSchema,templateSchema,checkRequest } from './content-studio/contracts.ts';
+import { studioFixture,fixtureSvg } from './content-studio/fixtures.ts';
+import {Examples} from './content-studio/examples.ts';
+import {intakeSnapshot} from './content-studio/intake.ts';
+import {studioRequestSchema} from './content-studio/contracts.ts';
 
 export function createApp(store: Store, port = 4318) {
-  const token = randomBytes(24).toString('hex'), service = new Service(store);
+  const token = randomBytes(24).toString('hex'), service = new Service(store),studio=new ContentStudio(store);
   const server = createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       const host = req.headers.host; assert(host === `127.0.0.1:${port}` || host === `localhost:${port}`, 'Host inválido.');
       const path = new URL(req.url!, `http://${host}`).pathname;
-      if (req.method === 'GET' && ['/', '/app.js', '/style.css'].includes(path)) {
+      if(req.method==='GET'&&['/studio-fixture-sand.svg','/studio-fixture-blue.svg'].includes(path)){
+        res.setHeader('Content-Type','image/svg+xml');res.end(fixtureSvg(path.includes('sand')?'sand':'blue'));return;
+      }
+      if(req.method==='GET'&&path.startsWith('/content-preview/')){
+        assert((req.headers.cookie??'').split(';').some(v=>v.trim()==='catana_preview_'+port+'='+token),'Acesso de prévia negado.');
+        const u=new URL(req.url!,`http://${host}`),parts=path.split('/'),id=z.uuid().parse(parts[2]),template=templateSchema.parse(parts[3]);
+        const scope=studioScopeSchema.parse({workspaceId:u.searchParams.get('workspace'),clientId:u.searchParams.get('client'),storeId:u.searchParams.get('store')});
+        const preview=studio.preview(id,scope,template,u.searchParams.get('color')??undefined,u.searchParams.get('original')==='1');
+        assert(preview.record.revision===Number(parts[4]),'Prévia de revisão antiga bloqueada.');
+        const hosts=preview.record.request.brand.mediaHosts.filter(h=>/^[a-z0-9.-]+$/i.test(h)).map(h=>'https://'+h).join(' ');
+        res.setHeader('Content-Security-Policy',`default-src 'none'; style-src 'unsafe-inline'; img-src 'self' ${hosts}; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; sandbox`);
+        res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Content-Type','text/html; charset=utf-8');res.end(preview.html);return;
+      }
+      if (req.method === 'GET' && ['/', '/app.js', '/style.css','/editorial-local.js','/brazil-ui.js','/content-studio.js','/content-studio.css'].includes(path)) {
+        if(path==='/')res.setHeader('Set-Cookie',`catana_preview_${port}=${token}; HttpOnly; SameSite=Strict; Path=/content-preview/`);
         res.setHeader('Content-Type', path === '/' ? 'text/html; charset=utf-8' : path.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8');
         res.end(readFileSync(new URL(`../public/${path === '/' ? 'index.html' : path.slice(1)}`, import.meta.url), 'utf8').replace('__TOKEN__', token)); return;
       }
@@ -40,8 +65,50 @@ export function createApp(store: Store, port = 4318) {
         body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
       }
       let result: unknown;
-      if (req.method === 'GET' && path === '/api/state') result = {
-        orders: store.orders().map(o => ({ ...o, economics: economics(o), tasks: orderTasks(o) })), gates: service.readiness(), policy, formats: supportedFormats(),
+      if(req.method==='GET'&&path==='/api/studio/list')result=studio.list();
+      else if(req.method==='POST'&&path==='/api/studio/intake')result=intakeSnapshot(body.snapshot,studioScopeSchema.parse(body.scope),studioRequestSchema.shape.brand.parse(body.brand));
+      else if(req.method==='POST'&&path==='/api/studio/collect'){
+        const scope=studioScopeSchema.parse(body.scope),brand=studioRequestSchema.shape.brand.parse(body.brand),url=new URL(z.string().max(2000).parse(body.url));
+        if(url.protocol!=='https:'||url.search||url.hash||url.username||url.password||!/^\/products\/[^/]+\/?$/.test(url.pathname))throw Error('Use URL HTTPS de um produto Shopify sem parâmetros; alternativamente importe a ficha JSON.');
+        const snapshot=await collectProductPages({origin:url.origin,approvedOrigin:url.origin,scope:{workspaceId:scope.workspaceId,clientId:scope.clientId},handles:[url.pathname.split('/')[2]],mode:'public-readonly'});
+        result=intakeSnapshot(snapshot,scope,brand);
+      }
+      else if(req.method==='GET'&&path==='/api/studio/fixture'){
+        const brand=z.enum(['clara','horizonte']).default('clara').parse(new URL(req.url!,`http://${host}`).searchParams.get('brand')??undefined);
+        result=studioFixture({workspaceId:'local',clientId:'fixture',storeId:brand},brand);
+      }
+      else if(req.method==='POST'&&path==='/api/studio/create'){
+        const fields=z.object({id:z.uuid(),name:z.string().min(1),email:z.email(),request:z.unknown()}).parse(body);
+        const client=store.client(fields.name,fields.email),request=fields.request as any;
+        result=studio.create({...request,scope:{...request?.scope,clientId:client.id}},fields.id);
+      }
+      else if(req.method==='POST'&&path.startsWith('/api/studio/')){
+        const scope=studioScopeSchema.parse(body.scope),id=z.uuid().parse(body.id);
+        if(path==='/api/studio/read'){
+          const record=studio.get(id,scope),client=store.db.prepare('SELECT name,email FROM clients WHERE id=?').get(record.request.scope.clientId);
+          result={...record,client,issues:checkRequest(record.request)};
+        }
+        else if(path==='/api/studio/operations')result=new StudioOperations(studio).overview(id,scope);
+        else if(path==='/api/studio/connect-order')result=new StudioOperations(studio).connect(id,scope,body.orderId===undefined?undefined:z.uuid().parse(body.orderId));
+        else if(path==='/api/studio/revise')result=studio.revise(id,scope,z.number().int().nonnegative().parse(body.revision),body.request);
+        else if(path==='/api/studio/approve')result=studio.approve(id,scope,z.number().int().nonnegative().parse(body.revision),body.approval);
+        else if(path==='/api/studio/cancel')result=studio.cancel(id,scope,z.number().int().nonnegative().parse(body.revision));
+        else if(path==='/api/studio/effort')result=studio.effort(id,scope,body.effort);
+        else if(path==='/api/studio/jobs')result=studio.jobs(id,scope);
+        else if(path==='/api/studio/handoff')result=studio.handoff(id,scope);
+        else if(path==='/api/studio/structured'){const task=studio.structuredAdvice(id,scope,z.enum(['planner','production','quality']).parse(body.role));result={id:enqueueAgent(store,task.role,task.input,task.clientId,task.id)};}
+        else if(path==='/api/studio/apply-draft')result=studio.applyDraft(id,scope,z.number().int().nonnegative().parse(body.revision),z.string().parse(body.jobId));
+        else if(path==='/api/studio/learn')result={id:studio.learn(id,scope,body.correction)};
+        else if(path==='/api/studio/revoke-example'){studio.get(id,scope);new Examples(store).revoke(scope,z.string().parse(body.exampleId),z.string().min(1).parse(body.operator));result={revoked:true};}
+        else if(path==='/api/studio/advice'){const task=studio.advice(id,scope,z.enum(['planner','production','quality']).parse(body.role));result={id:enqueueAgent(store,task.role,task.input,task.clientId,task.id)};}
+        else if(path==='/api/studio/export'){
+          const zip=studio.export(id,scope,z.number().int().nonnegative().parse(body.revision));
+          res.setHeader('Content-Type','application/zip');res.setHeader('Content-Disposition',`attachment; filename="conteudo-${id}.zip"`);res.end(zip);return;
+        }else throw Error('Rota de conteúdo desconhecida.');
+      }
+      else if (req.method === 'GET' && path === '/api/state') result = {
+        fieldCase:existsSync(new URL('../artifacts/field-case-summary.json',import.meta.url))?JSON.parse(readFileSync(new URL('../artifacts/field-case-summary.json',import.meta.url),'utf8')):null,
+        orders: store.orders().map(o => ({ ...o, economics: economics(o), tasks: orderTasks(o) })), gates: service.readiness(), policy, formats: supportedFormats(), offers, recurringOffer,
         coordination: store.orders().map(orderAssignment), team: agentContracts, business: businessContext,
         messages: store.db.prepare('SELECT * FROM outbox ORDER BY created_at DESC LIMIT 100').all(),
         inbox: store.db.prepare('SELECT * FROM inbox ORDER BY received_at DESC LIMIT 100').all(),
@@ -54,7 +121,11 @@ export function createApp(store: Store, port = 4318) {
       };
       else if (req.method === 'POST' && path === '/api/demo') result = await runDemo(store);
       else if (req.method === 'POST' && path === '/api/preview') { const rows = await readTable(Buffer.from(z.string().parse(body.data), 'base64'), extname(z.string().parse(body.filename)).toLowerCase(), 550, z.enum([',',';']).default(',').parse(body.delimiter)); result = { columns: Object.keys(rows[0] ?? {}), rows: rows.length }; }
-      else if (req.method === 'POST' && path === '/api/orders') result = await service.create({ ...z.object({ name: z.string().min(1), email: z.email(), filename: z.string().max(200), data: z.string(), mapping: mappingSchema, profile: supplierProfileSchema.optional(), demo: z.boolean().default(false) }).parse(body), data: Buffer.from(body.data, 'base64') });
+      else if (req.method === 'POST' && path === '/api/orders') result = await service.create({ ...z.object({ name: z.string().min(1), email: z.email(), filename: z.string().max(200), data: z.string(), mapping: mappingSchema, profile: supplierProfileSchema.optional(), demo: z.boolean().default(false), service:z.enum(['catalog','combined']).default('catalog'),content:z.unknown().optional() }).parse(body), data: Buffer.from(body.data, 'base64') });
+      else if (req.method === 'POST' && path === '/api/editorial') result=createEditorial(store,z.object({name:z.string().min(1),email:z.email(),service:z.enum(['diagnostic','content']),brief:z.unknown(),demo:z.literal(true)}).parse(body));
+      else if (req.method === 'POST' && path === '/api/editorial/revise') result=reviseEditorial(store,z.string().parse(body.id),body.brief,z.enum(['scope-adjustment','defect']).parse(body.reason));
+      else if (req.method === 'POST' && path === '/api/learning/propose') result=proposeLearning(store,body);
+      else if (req.method === 'POST' && path === '/api/learning/review') result=reviewLearning(store,z.string().parse(body.id),z.string().parse(body.clientId),body.review);
       else if (req.method === 'POST' && path === '/api/action') {
         const id = z.string().parse(body.id), o = store.get(id);
         switch (body.action) {
@@ -65,17 +136,18 @@ export function createApp(store: Store, port = 4318) {
             assert(o.status === 'delivered', 'Pedido não está na janela de ajustes.');
             o.status = 'closed'; o.closedAt = new Date().toISOString(); store.save(o); store.audit(id, 'DELIVERY-01', 'simulated_adjustment_window_elapsed'); result = o; break;
           case 'process': result = await service.process(id); break;
-          case 'checkout': result = await new Payments(store).checkout(id); break;
+          case 'checkout': assert(!o.offer,'Oferta brasileira em validação: cobrança desativada.'); result = await new Payments(store).checkout(id); break;
           case 'cancel': result = service.cancel(id); break;
           case 'refund': result = await new Payments(store).refund(id); break;
           case 'revisionApprove': assert(o.status === 'revision_approval', 'Revisão indisponível.'); o.scopeApproved = true; o.status = 'queued'; store.save(o); store.audit(id, 'SCOPE-01', 'revision_approved'); result = o; break;
           case 'accept': assert(o.status === 'delivered' && body.evidence, 'Registre a evidência do aceite.'); o.acceptedAt = new Date().toISOString(); store.save(o); store.audit(id, 'DELIVERY-01', 'client_acceptance_recorded', { evidence: String(body.evidence).slice(0, 1000) }); result = o; break;
           case 'economics': o.hours = z.number().finite().nonnegative().parse(body.hours); o.fees = z.number().finite().nonnegative().parse(body.fees); o.costs = z.number().finite().nonnegative().parse(body.costs);
+            if(o.offer)o.taxes=z.number().finite().nonnegative().parse(body.taxes);
             o.economicsNote = z.string().min(10).max(2000).parse(body.note); o.economicsRecordedAt = new Date().toISOString();
             store.save(o); store.audit(id, 'PAY-01', 'economics_recorded', { hours: o.hours, fees: o.fees, costs: o.costs, note: o.economicsNote, simulated: o.demo || o.paymentMode === 'test' }); result = o; break;
           default: throw new Error('Ação desconhecida.');
         }
-      } else if (req.method === 'POST' && path === '/api/revise') result = await service.revise(z.string().parse(body.id), Buffer.from(z.string().parse(body.data), 'base64'), z.string().parse(body.filename), mappingSchema.parse(body.mapping));
+      } else if (req.method === 'POST' && path === '/api/revise') result = await service.revise(z.string().parse(body.id), Buffer.from(z.string().parse(body.data), 'base64'), z.string().parse(body.filename), mappingSchema.parse(body.mapping),z.enum(['scope-adjustment','defect']).default('scope-adjustment').parse(body.reason));
       else if (req.method === 'POST' && path === '/api/download') {
         const o = store.get(z.string().parse(body.id), z.string().parse(body.clientId)); assert(['ready','delivered','closed'].includes(o.status), 'Entrega indisponível.');
         res.setHeader('Content-Type', 'application/zip'); res.setHeader('Content-Disposition', `attachment; filename="catalog-${o.id}.zip"`); res.end(store.artifact(o.id, `delivery-${o.revision}.zip`)); return;

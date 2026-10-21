@@ -1,6 +1,10 @@
+## Direcionamento vigente: Catana Ops Brasil
+
+Catálogo e conteúdo para marcas brasileiras de vestuário Shopify. [Negócio, preços e limites](docs/BRASIL.md) · [Implementação, evidências e bloqueios](docs/IMPLEMENTACAO_BRASIL.md). Simulação: `node src/simulate-brazil.ts`. Novos pedidos BRL; histórico USD preservado. Ponte remota preparada, migração não aplicada nesta etapa por indisponibilidade da revisão automática. Nenhuma operação comercial liberada.
+
 # Shopmoney · Catana Ops
 
-Repositório central do projeto: https://github.com/pensador999/catanaops.
+Repositório central do projeto: https://github.com/pensador999/shopmoney.
 Catana Ops é o nome operacional; `catalog-ops` permanece como nome técnico da aplicação e da pasta local.
 
 **Fase atual: validação local, sem operação comercial liberada.** Objetivo: entregar um piloto de preparação de catálogo Shopify em dólares, medindo custos e esforço total.
@@ -35,3 +39,4 @@ Para os agentes, execute `npm run agents` em outro terminal e configure `AI_ENAB
 O fluxo local e as regras têm testes automatizados. Eve respondeu a dados sintéticos usando ChatGPT. Não foram configurados Gmail, Stripe, Cloudflare ou loja Shopify, nem feitas vendas ou abordagens. Assinatura, pesquisa de contatos e integração de código dos repositórios BRK permanecem pendentes conforme o documento de retomada.
 
 Não expor o painel local na internet. Não versionar `.env`, `data`, `backups` ou pacotes de clientes. Use `node src/cli.ts backup` para uma cópia consistente do SQLite.
+- Integração seletiva LeakFinder: [componentes, teste reproduzível e limites](docs/INTEGRACAO_LEAKFINDER.md). Execute npm run demo:inspection para o ciclo sintético isolado.

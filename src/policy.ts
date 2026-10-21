@@ -1,8 +1,8 @@
 export const policy = Object.freeze({
-  version: '2026-10-15.1', currency: 'usd', pilotCents: 14900,
-  monthlyCents: 39900, maxProducts: 50, maxVariants: 500,
+  version: 'br-2026-10-19.1', currency: 'brl', pilotCents: 69000,
+  monthlyCents: 149000, maxProducts: 20, maxVariants: 200,
   maxBytes: 5_000_000, maxCorrections: 2, maxContactsPerDay: 5,
-  laborRate: 25,
+  laborRate: 60,
   rules: {
     scope: 'SCOPE-01', preserve: 'DATA-01', quality: 'QA-01',
     payment: 'PAY-01', isolation: 'TENANT-01', quota: 'AI-01',

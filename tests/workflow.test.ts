@@ -16,7 +16,7 @@ test('pagamento de sandbox nunca autoriza email real',async()=>{
   const s=new Store(':memory:'), previous=process.env.MAIL_SEND_ENABLED;
   try {
     const svc=new Service(s),o=await svc.create(input);svc.approve(o.id);const p=s.get(o.id);p.checkoutId='cs_sandbox';s.save(p);
-    new Payments(s,new Stripe('rk_test_fake')).apply({id:'evt_sandbox',type:'checkout.session.completed',livemode:false,data:{object:{id:'cs_sandbox',mode:'payment',amount_total:14900,currency:'usd',client_reference_id:o.id,payment_status:'paid'}}} as any);
+    new Payments(s,new Stripe('rk_test_fake')).apply({id:'evt_sandbox',type:'checkout.session.completed',livemode:false,data:{object:{id:'cs_sandbox',mode:'payment',amount_total:o.amount,currency:o.currency,client_reference_id:o.id,payment_status:'paid'}}} as any);
     const ready=await svc.process(o.id);approveMessage(s,ready.deliveryId!);s.set('identity',{name:'Synthetic',address:'Synthetic'});process.env.MAIL_SEND_ENABLED='true';
     await assert.rejects(()=>sendOutbox(s),/ambiente de testes/);
     assert.equal((s.db.prepare('SELECT status FROM outbox WHERE id=?').get(ready.deliveryId!) as any).status,'approved');
@@ -32,16 +32,16 @@ test('webhook falsificado, valor incorreto e evento duplicado',async()=>{
   const s=new Store(':memory:');try{
     const svc=new Service(s),o=await svc.create(input);svc.approve(o.id);const pending=s.get(o.id);pending.checkoutId='cs_test_123';s.save(pending);
     const sdk=new Stripe('rk_test_fake'), payments=new Payments(s,sdk),secret='whsec_test_only';
-    const event:any={id:'evt_1',type:'checkout.session.completed',livemode:false,data:{object:{id:'cs_test_123',mode:'payment',amount_total:14900,currency:'usd',client_reference_id:o.id,payment_status:'paid',payment_intent:'pi_1'}}};
+    const event:any={id:'evt_1',type:'checkout.session.completed',livemode:false,data:{object:{id:'cs_test_123',mode:'payment',amount_total:o.amount,currency:o.currency,client_reference_id:o.id,payment_status:'paid',payment_intent:'pi_1'}}};
     assert.throws(()=>payments.verify(Buffer.from(JSON.stringify(event)),'t=0,v1=bad',secret));
     event.data.object.amount_total=1;assert.throws(()=>payments.apply(event));assert.equal(s.get(o.id).status,'awaiting_payment');
-    event.data.object.amount_total=14900;const payload=JSON.stringify(event),sig=sdk.webhooks.generateTestHeaderString({payload,secret});payments.verify(Buffer.from(payload),sig,secret);
+    event.data.object.amount_total=o.amount;const payload=JSON.stringify(event),sig=sdk.webhooks.generateTestHeaderString({payload,secret});payments.verify(Buffer.from(payload),sig,secret);
     assert.equal(s.get(o.id).status,'queued');assert.equal(s.get(o.id).paymentMode,'test');assert.deepEqual(payments.apply(event),{duplicate:true});
   }finally{s.close();}
 });
 test('pagamento assíncrono não liberado fica pendente; pagamento tardio após cancelamento pede reembolso',async()=>{
   const s=new Store(':memory:');try{const svc=new Service(s),o=await svc.create(input);svc.approve(o.id);const p=s.get(o.id);p.checkoutId='cs_x';s.save(p);const pay=new Payments(s,new Stripe('rk_test_fake'));
-    const e:any={id:'e1',type:'checkout.session.completed',livemode:false,data:{object:{id:'cs_x',mode:'payment',amount_total:14900,currency:'usd',client_reference_id:o.id,payment_status:'unpaid'}}};pay.apply(e);assert.equal(s.get(o.id).status,'awaiting_payment');svc.cancel(o.id);e.id='e2';e.type='checkout.session.async_payment_succeeded';e.data.object.payment_status='paid';e.data.object.payment_intent='pi_x';pay.apply(e);assert.equal(s.get(o.id).status,'refund_pending');
+    const e:any={id:'e1',type:'checkout.session.completed',livemode:false,data:{object:{id:'cs_x',mode:'payment',amount_total:o.amount,currency:o.currency,client_reference_id:o.id,payment_status:'unpaid'}}};pay.apply(e);assert.equal(s.get(o.id).status,'awaiting_payment');svc.cancel(o.id);e.id='e2';e.type='checkout.session.async_payment_succeeded';e.data.object.payment_status='paid';e.data.object.payment_intent='pi_x';pay.apply(e);assert.equal(s.get(o.id).status,'refund_pending');
   }finally{s.close();}
 });
 test('isolamento entre clientes e retomada de pedido após reabrir SQLite',async()=>{

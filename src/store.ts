@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { policy, assert } from './policy.ts';
 import { orderTasks } from './order-workflow.ts';
+import type { OfferSnapshot } from './offers.ts';
 
 export type Order = {
   id: string; clientId: string; status: string; demo: boolean; filename: string;
@@ -15,6 +16,9 @@ export type Order = {
   paymentMode?: 'test' | 'live';
   supplierProfile?: { id: string; version: string };
   economicsRecordedAt?: string; economicsNote?: string; productionAttempts?: number;
+  offer?: OfferSnapshot; taxes?: number; brandProfile?: unknown; contentInput?: unknown;
+  remoteWorkspaceId?: string;
+  learningProposals?: any[];
 };
 export class Store {
   db: DatabaseSync;
@@ -36,6 +40,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS leases(name TEXT PRIMARY KEY,owner TEXT NOT NULL,expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS subscriptions(id TEXT PRIMARY KEY,client_id TEXT NOT NULL,data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS order_tasks(id TEXT PRIMARY KEY,order_id TEXT NOT NULL REFERENCES orders(id),data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS client_profiles(client_id TEXT NOT NULL REFERENCES clients(id),version TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(client_id,version));
+      CREATE TABLE IF NOT EXISTS learning_proposals(id TEXT PRIMARY KEY,client_id TEXT NOT NULL REFERENCES clients(id),data TEXT NOT NULL);
     `);
   }
   transaction<T>(fn: () => T): T {
@@ -63,6 +69,11 @@ export class Store {
     if (this.db.isTransaction) persist(); else this.transaction(persist);
   }
   orders(): Order[] { return (this.db.prepare('SELECT data FROM orders ORDER BY rowid DESC').all() as any[]).map(r => JSON.parse(r.data)); }
+  profile(clientId:string,version:string,data:unknown){
+    const text=JSON.stringify(data),old=this.db.prepare('SELECT data FROM client_profiles WHERE client_id=? AND version=?').get(clientId,version) as any;
+    assert(!old||old.data===text,'Versão de perfil já existe com outro conteúdo; crie nova versão.');
+    this.db.prepare('INSERT OR IGNORE INTO client_profiles VALUES(?,?,?)').run(clientId,version,text);
+  }
   artifact(id: string, name: string, data?: Buffer | string) {
     if (data !== undefined) this.db.prepare('INSERT OR IGNORE INTO artifacts VALUES(?,?,?)').run(id, name, Buffer.isBuffer(data) ? data : Buffer.from(data));
     const row = this.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(id, name) as any;

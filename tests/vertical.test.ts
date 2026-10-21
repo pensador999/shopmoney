@@ -14,6 +14,6 @@ test('namespace do cliente não pode ser injetado pelo arquivo ou mapeamento',as
 test('referências de mídia acompanham SKU sem baixar nem publicar imagens',async()=>{
   const s=new Store(':memory:');try{const svc=new Service(s);const input='product_id,title,sku,price,image\n1,Demo,001,9.90,https://example.com/image.jpg\n';
     const o=await svc.create({name:'A',email:'a@example.com',filename:'media.csv',data:Buffer.from(input),mapping:{supplierKey:'one',productId:'product_id',title:'title',sku:'sku',price:'price',options:[],imageUrl:'image'},demo:true});svc.approve(o.id);svc.simulatePayment(o.id);await svc.process(o.id);
-    const zip=new AdmZip(s.artifact(o.id,'delivery-0.zip')), media=JSON.parse(zip.readAsText('media-review.json'));assert.equal(media[0].sku,'001');assert.match(media[0].status,/Not fetched/);assert(!zip.readAsText('shopify.csv').includes('https://example.com'));
+    const zip=new AdmZip(s.artifact(o.id,'delivery-0.zip')), media=JSON.parse(zip.readAsText('media-review.json'));assert.equal(media[0].sku,'001');assert.match(media[0].status,/não baixada/);assert(!zip.readAsText('shopify.csv').includes('https://example.com'));
   }finally{s.close();}
 });

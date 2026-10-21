@@ -1,0 +1,32 @@
+{
+  "repository": "pensador999/leakfinder-saas",
+  "commit": "34874334726717c4ff3eb5472cef4145e3897a86",
+  "execution": "reference-only; originals not imported",
+  "files": [
+    {
+      "path": "api/catalog-proxy.ts.txt",
+      "sha256": "c52969178b7649e1614186241c70275dd95275badd6ba59d8d71659e482ae33e",
+      "bytes": 6101
+    },
+    {
+      "path": "src/services/catalog/deepSkuAuditEngine.ts.txt",
+      "sha256": "d5c38f8c4033dee58666443903220ec9a8cd33229b693c24324cc8195bb4d50b",
+      "bytes": 16886
+    },
+    {
+      "path": "src/services/crawler/adaptiveCrawlerQueue.ts.txt",
+      "sha256": "9f448b62a3833a283ececdc123666d84f11f9d7353fc8cbf023fd43c5419883d",
+      "bytes": 5252
+    },
+    {
+      "path": "src/services/memory/storeContextMemory.ts.txt",
+      "sha256": "c3e5d6b05bfe5ba22565f41ff76588db9ccfc51a4348401520a0bea509958b35",
+      "bytes": 10694
+    },
+    {
+      "path": "src/types/swarmAgentContract.ts.txt",
+      "sha256": "b5703675c63cb4e799fb18352ffd32d10378dd61222043fb3ea5f66cce545c55",
+      "bytes": 2809
+    }
+  ]
+}

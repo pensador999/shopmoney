@@ -1,0 +1,30 @@
+import { z } from 'zod';
+import { hash } from './catalog.ts';
+import type { AgentRole } from './business-context.ts';
+
+const common={orderId:z.uuid(),revision:z.number().int().nonnegative(),service:z.enum(['diagnostic','content','catalog','combined']),evidence:z.array(z.string().min(1)).min(1),pending:z.array(z.string()),};
+export const handoffSchemas={
+  research:z.object({...common,fit:z.enum(['qualified','unverified','declined']),sources:z.array(z.url()).min(1)}),
+  sales:z.object({...common,need:z.string().min(1),buyer:z.string().min(1),scope:z.string().min(1)}),
+  support:z.object({...common,materials:z.array(z.string()).min(1),questions:z.array(z.string())}),
+  planner:z.object({...common,mappingHash:z.string().min(1),brandVersion:z.string().min(1),operatorApproval:z.literal(true)}),
+  production:z.object({...common,artifacts:z.array(z.string()).min(1),manifestHash:z.string().min(1)}),
+  quality:z.object({...common,passed:z.literal(true),checks:z.array(z.string()).min(1),executor:z.literal('independent-code')}),
+  finance:z.object({...common,confirmation:z.enum(['simulated','processor']),amountCents:z.number().int().nonnegative(),currency:z.string().length(3)}),
+  coordinator:z.object({...common,next:z.string().min(1),owner:z.string().min(1)}),
+};
+export function validateHandoff(role:AgentRole,input:unknown,expected:{orderId:string;revision:number;service:string}) {
+  const parsed=handoffSchemas[role].parse(input);
+  if(parsed.orderId!==expected.orderId||parsed.revision!==expected.revision||parsed.service!==expected.service||parsed.pending.length) throw Error('Passagem bloqueada: revisão, serviço ou pendências divergentes.');
+  return {...parsed,role,hash:hash(JSON.stringify(parsed))};
+}
+export type LearningProposal={clientId:string;revision:number;problem:string;evidence:string[];proposedRule:string;testEvidence?:string;approvedBy?:string};
+export function promoteLearning(p:LearningProposal,operator:string){
+  if(!p.evidence.length||!p.testEvidence||p.approvedBy!==operator||!operator)throw Error('Aprendizado exige evidência, teste e aprovação do operador.');
+  return {...p,status:'approved',scope:'client-only'};
+}
+export function replenishmentReadiness(input:{historyDays:number;sales:boolean;availability:boolean;stock:boolean;inTransit:boolean;leadTime:boolean}) {
+  return input.historyDays>=90&&input.sales&&input.availability&&input.stock&&input.inTransit&&input.leadTime
+    ? {status:'eligible_for_review',automaticPurchase:false}
+    : {status:'not_evaluable',reason:'Exige 90 dias, vendas líquidas, disponibilidade, estoque, trânsito e prazo. Esgotado não comprova alta procura.',automaticPurchase:false};
+}

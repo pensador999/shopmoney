@@ -29,7 +29,8 @@ export async function tick(store: Store) {
   service.closeExpired();
   if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) await step('mailbox', async () => { await pollInbox(store); await reconcileSent(store); });
   if (process.env.AI_ENABLED === 'true') await step('agents', async () => {
-    for (const o of store.orders().filter(o => !['closed','cancelled','refunded'].includes(o.status)).slice(0,20)) {
+    // Routine next actions are already deterministic. Spend model quota only on exceptions.
+    for (const o of store.orders().filter(o => ['needs_info','needs_attention','refund_pending'].includes(o.status)).slice(0,20)) {
       const task = orderAgentRequest(store, o.id);
       enqueueAgent(store, task.role, task.input, task.clientId, task.id);
     }

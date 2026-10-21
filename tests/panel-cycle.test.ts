@@ -34,8 +34,8 @@ test('ciclo HTTP preserva perfil, tarefas e custos até encerramento simulado', 
     for (const action of ['approve','demoPayment','process','demoDelivery']) assert.equal((await request('action',{id,action})).status,200);
     assert.equal(economics(store.get(id)).contribution,null);
     assert.equal((await request('action',{id,action:'economics',hours:2,fees:7,costs:2})).status,400);
-    assert.equal((await request('action',{id,action:'economics',hours:2,fees:7,costs:2,note:'Simulação: prospecção 30m, atendimento 30m, produção/QA/correções 60m.'})).status,200);
-    assert.equal(economics(store.get(id)).contribution,90);
+    assert.equal((await request('action',{id,action:'economics',hours:2,fees:7,costs:2,taxes:0,note:'Simulação: prospecção 30m, atendimento 30m, produção/QA/correções 60m.'})).status,200);
+    assert.equal(economics(store.get(id)).contribution,561);
     assert.equal(economics(store.get(id)).state,'hypothetical');
     // Raw parent/variant revisions preserve the same profile and require fresh approval.
     const revised = await request('revise',{id,filename:'supplier.csv',data:Buffer.from(raw.replace('19.90','20.90')).toString('base64'),mapping:demoMapping});
@@ -47,7 +47,7 @@ test('ciclo HTTP preserva perfil, tarefas e custos até encerramento simulado', 
     assert.equal(JSON.parse(store.artifact(id,'profile-1.json').toString()).id,'test-profile');
     assert.equal(store.artifact(id,'original').toString(),raw);
     assert(store.artifact(id,'shopify-1.csv').toString().includes('20.90'));
-    assert.equal((await request('action',{id,action:'economics',hours:2.25,fees:7,costs:2,note:'Simulação inclui 15 minutos adicionais da revisão.'})).status,200);
+    assert.equal((await request('action',{id,action:'economics',hours:2.25,fees:7,costs:2,taxes:0,note:'Simulação inclui 15 minutos adicionais da revisão.'})).status,200);
     assert.equal((await request('action',{id,action:'demoClose'})).status,200);
     assert.equal(store.get(id).acceptedAt,undefined);
     const state=(await request('state')).body;

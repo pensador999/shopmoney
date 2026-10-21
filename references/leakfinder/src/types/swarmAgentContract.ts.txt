@@ -1,0 +1,77 @@
+/**
+ * ==============================================================================
+ * 🏛️ SWARM AGENT CONTRACT & GOVERNANCE INTERFACE
+ * AdShield SaaS • Swarm Multi-Agente V4.0
+ * Protocolo de Integridade: AGENTS.md (Camadas 1, 2 e 3 de Grounding)
+ * ==============================================================================
+ */
+
+export type SwarmAgentLayer = 
+  | 'GOVERNANCE'       // Camada 1: CEO, Niche, Truth Auditor, Consensus Tribunal
+  | 'ACQUISITION'      // Camada 2: Media Buyer, Market Hunter, Competitor Radar, Copywriter
+  | 'CRO_CATALOG'      // Camada 3: Catalog Doctor, CRO Architect, Vision Saliency, Core Web Vitals
+  | 'SUPPLY_CHAIN'     // Camada 4: ERP/Discrepancy, Customer Success VoC, Product Evolution
+  | 'INFRASTRUCTURE';  // Camada 5: DevOps Sentinel, Code Patch, WhatsApp Watchdog
+
+export type GroundingLevel = 
+  | 'CAMADA_1_REAL'       // Fato Real auditado do DOM/API pública (Zero alucinação)
+  | 'CAMADA_2_SIMULACAO'  // Projeção / Cenário paramétrico (Rotulado explicitamente)
+  | 'CAMADA_3_PRIVADO';   // Métrica restrita (Requer integração oficial Shopify/GA4/Clarity)
+
+export type FindingSeverity = 'CRITICA' | 'ALTA' | 'MEDIA' | 'BAIXA' | 'INFORMATIVA';
+
+export interface SwarmFindingEvidence {
+  selectorOrUrl?: string;
+  capturedValue?: string | number | boolean;
+  expectedValue?: string | number | boolean;
+  screenshotSnippetUrl?: string;
+  sourceType: 'DOM' | 'PRODUCTS_JSON' | 'HEAD_TAG' | 'NETWORK_HEADER' | 'BENCHMARK_MODEL';
+}
+
+export interface SwarmFinding {
+  id: string;
+  title: string;
+  description: string;
+  severity: FindingSeverity;
+  groundingLevel: GroundingLevel;
+  evidence: SwarmFindingEvidence;
+  monthlyRevenueImpactBRL: number;
+  iceScore: {
+    impact: number;      // 1-10
+    confidence: number;  // 1-10
+    ease: number;        // 1-10
+    finalScore: number;  // (I * C * E) / 10
+  };
+  suggestedAction: string;
+  automatedFixCode?: {
+    language: 'liquid' | 'javascript' | 'css' | 'json';
+    fileName: string;
+    codeSnippet: string;
+  };
+}
+
+export interface SwarmAgentResult<T = any> {
+  agentId: string;
+  agentName: string;
+  layer: SwarmAgentLayer;
+  status: 'SUCCESS' | 'WARNING' | 'FAILED' | 'SKIPPED';
+  durationMs: number;
+  executedAt: string;
+  groundingCompliance: boolean;
+  findings: SwarmFinding[];
+  metrics: Record<string, number | string | boolean>;
+  data: T;
+  warnings?: string[];
+  error?: string;
+}
+
+export interface SwarmAgentContract<TInput = any, TOutput = any> {
+  readonly agentId: string;
+  readonly agentName: string;
+  readonly layer: SwarmAgentLayer;
+  readonly defaultTimeoutMs: number;
+
+  execute(input: TInput, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<SwarmAgentResult<TOutput>>;
+  validateGrounding(result: SwarmAgentResult<TOutput>): boolean;
+}
+

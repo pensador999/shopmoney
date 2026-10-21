@@ -1,4 +1,12 @@
+## Contratos Brasil vigentes
+
+Schemas executáveis em src/handoffs.ts. Conteúdo e diagnóstico usam entrada própria; catálogo preserva origem e variantes. Operador aprova planejamento; financeiro distingue simulação; código produz e confere. Consulte docs/BRASIL.md e docs/IMPLEMENTACAO_BRASIL.md para limites. IA consultiva não conclui etapa.
+
 # Contratos do time — especificação para implementação
+
+Referência vigente da revisão em 19/10/2026: `docs/PRONTIDAO_COPILOTO.md`, gerado de `src/workflow.ts`. Mapa, matriz por função, evidências e limitações usam essa fonte. As seções abaixo incluem especificação e histórico; não implicam que pesquisa, comercial, atendimento e tarefas remotas já estejam conectados ponta a ponta. Login e leitura remota foram confirmados; escrita e executor remotos continuam pendentes.
+
+Atualização posterior de 17/10: cada papel possui procedimento MD em `docs/agents/`, carregado efetivamente pelo executor e identificado por hash. Resposta consultiva é descartada se o pedido mudar durante a chamada. Cada job possui limite de três tentativas. Ver `docs/agents/README.md`. Isso não cria ferramentas externas nem conclui os handoffs especializados descritos abaixo.
 
 Incremento 17/10: contratos executáveis e contexto empresarial versionado em `src/business-context.ts`; coordenação consultiva ligada ao pedido em `src/coordination.ts`, acionável no quadro da visão geral e automaticamente pelo runtime quando IA habilitada. Resultado de IA não conclui etapas. Supabase possui fila serial privada testada, ainda não conectada ao serviço SQLite. Detalhes e limites em `docs/LIBERACAO_VERCEL.md`; os pontos abaixo registram a especificação e o histórico anterior.
 

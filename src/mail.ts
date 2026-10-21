@@ -1,3 +1,4 @@
+import { outreachCopy } from './commercial-copy.ts';
 import nodemailer from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
@@ -23,11 +24,11 @@ export function prepareCampaign(store: Store) {
   assert(identity.name && identity.address, 'Configure nome e endereço comercial.');
   for (const lead of store.db.prepare('SELECT * FROM leads').all() as any[]) {
     const data = JSON.parse(lead.data); if (!data.qualified || store.db.prepare('SELECT email FROM suppression WHERE email=?').get(lead.email)) continue;
-    const footer = `\n\n${identity.name}\n${identity.address}\nCommercial service offer. Reply "unsubscribe" to stop further outreach.`;
-    store.enqueue(`lead-${lead.id}`, null, lead.email, 'outreach', 'Supplier catalog preparation for your Shopify projects', `Hello ${data.name},\n\nI noticed your agency offers Shopify implementation services (${data.source}). I prepare supplier CSV/XLSX files as new Shopify draft-product imports, with a quality report and instructions. The pilot is USD 149 for one supplier, up to 50 products and 500 variants. No store access is required. Would this be relevant to an upcoming project? I can share a synthetic example.${footer}`);
+    const footer = `\n\n${identity.name}\n${identity.address}\nOferta comercial. Responda "não tenho interesse" para não receber novos contatos.`;
+    store.enqueue(`lead-${lead.id}`, null, lead.email, 'outreach', 'Catana Ops — catálogo e conteúdo para vestuário', outreachCopy(data.name,data.source,footer));
     const sent = store.db.prepare("SELECT sent_at FROM outbox WHERE id=? AND status='sent'").get(`lead-${lead.id}`) as any;
     const replied = store.db.prepare('SELECT id FROM inbox WHERE sender=?').get(lead.email);
-    if (sent && !replied && businessDays(new Date(sent.sent_at), 5) <= new Date().toISOString()) store.enqueue(`followup-${lead.id}`, null, lead.email, 'followup', 'Following up: Shopify supplier catalog files', `Hello ${data.name},\n\nOne follow-up on the catalog service. If useful, reply with your approximate product and variant counts. Otherwise I will not follow up again.${footer}`);
+    if (sent && !replied && businessDays(new Date(sent.sent_at), 5) <= new Date().toISOString()) store.enqueue(`followup-${lead.id}`, null, lead.email, 'followup', 'Catana Ops — acompanhamento único', `Olá, ${data.name}.\n\nUm único acompanhamento sobre catálogo e conteúdo. Se for relevante, informe seu próximo lote e a dificuldade concreta. Sem interesse, não faremos novo acompanhamento.${footer}`);
   }
 }
 export function approveMessage(store: Store, id: string) {
@@ -37,11 +38,11 @@ export function approveMessage(store: Store, id: string) {
   store.audit(message.order_id, policy.rules.outreach, 'message_approved', { id });
 }
 function imap() { return new ImapFlow({ host: 'imap.gmail.com', port: 993, secure: true, auth: { user: process.env.GMAIL_USER!, pass: process.env.GMAIL_APP_PASSWORD! }, logger: false }); }
-export async function pollInbox(store: Store) {
+export async function pollInbox(store: Store, filter?: { subject: string }) {
   assert(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD, 'Configure Gmail com senha de app.');
   const client = imap(); await client.connect(); const lock = await client.getMailboxLock('INBOX');
   try {
-    const uids = await client.search({ since: new Date(Date.now() - 30 * 86400000) }, { uid: true });
+    const uids = await client.search({ since: new Date(Date.now() - 30 * 86400000), ...(filter ? { header: { subject: filter.subject } } : {}) }, { uid: true });
     if (!uids || !uids.length) return;
     for await (const msg of client.fetch(uids.slice(-100), { source: true }, { uid: true })) {
       if (!msg.source || msg.source.length > 10_000_000) continue;
@@ -54,7 +55,7 @@ export async function pollInbox(store: Store) {
       if (/\b(unsubscribe|remove me|stop contacting|not interested|opt out)\b/i.test(`${subject}\n${body}`)) { suppress(store, sender, 'Resposta de recusa'); continue; }
       const customer = store.db.prepare('SELECT id FROM clients WHERE email=?').get(sender) as any;
       const lead = store.db.prepare('SELECT id FROM leads WHERE email=?').get(sender);
-      if (customer || lead) enqueueAgent(store, 'sales', { inboxId: id, subject, body, attachments: parsed.attachments.map(a => ({ filename: a.filename, size: a.size })), note: 'Anexos não importados automaticamente; confirmar associação e mapeamento.' }, customer?.id ?? null, `mail-${id}`);
+      if (customer || lead) enqueueAgent(store, customer ? 'support' : 'sales', { inboxId: id, subject, body, attachments: parsed.attachments.map(a => ({ filename: a.filename, size: a.size })), note: 'Cliente conhecido: atendimento primeiro; dúvida comercial exige revisão. Anexos não importados automaticamente; confirmar associação e mapeamento.' }, customer?.id ?? null, `mail-${id}`);
     }
   } finally { lock.release(); await client.logout(); }
 }

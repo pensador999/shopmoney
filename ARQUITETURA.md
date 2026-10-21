@@ -1,3 +1,7 @@
+## Extensão Brasil — br-2026-10-19.1
+
+Ofertas versionadas em src/offers.ts; perfil e conteúdo em src/brand-content.ts; serviços independentes em src/service-editorial.ts; contratos em src/handoffs.ts; aprendizado por cliente em src/learning.ts. Bridge src/remote-operations.ts usa JWT do operador, Storage privado imutável, hash e RPC com CAS/lease. Migração brasileira ainda não aplicada; runtime SQLite preservado. Relatório docs/IMPLEMENTACAO_BRASIL.md distingue fixture e banco real.
+
 # Arquitetura e conexão com os repositórios de trabalho
 
 `entrada CSV/XLSX → perfil aprovado → pai/variantes → validação → Shopify CSV → conferência independente → pacote → aplicação pela agência → retorno/aceite`

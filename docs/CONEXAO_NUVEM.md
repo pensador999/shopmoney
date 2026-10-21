@@ -1,29 +1,19 @@
-# Destinos da operação — configuração pendente
+# Conexões oficiais e estado atual
 
-## Destinos informados pelo titular
+GitHub: https://github.com/pensador999/shopmoney.git
+Supabase: https://aqkwbmggkvvfhqaivxlh.supabase.co
+Administrador e email operacional: catanaops@gmail.com
 
-- GitHub principal: https://github.com/pensador999/catanaops
-- Supabase: https://aqkwbmggkvvfhqaivxlh.supabase.co
-- Projeto Supabase: `aqkwbmggkvvfhqaivxlh`
-- Vercel: importação futura; ainda não existe implantação validada neste fluxo.
+## Confirmado
 
-## Verificação desta etapa
+Projeto acessível; 13 tabelas no schema catanaops, workspace Catana Ops, administrador confirmado e bucket privado. Login e consulta remota do workspace confirmados pelo titular. Editor: https://supabase.com/dashboard/project/aqkwbmggkvvfhqaivxlh/editor?schema=catanaops . Schema public não contém as tabelas operacionais.
 
-Em 17/10/2026, o novo GitHub foi acessado por Git e estava vazio. O conector Supabase ainda lista somente Anzol; consulta de leitura no projeto acima retornou falta de permissão. Nenhuma tabela, credencial ou permissão remota foi alterada. O projeto Anzol não será usado para esta operação.
+IMAP e ingestão/deduplicação de email real validados em banco isolado. SMTP Auth configurado pelo titular. Envio operacional continua desativado e não comprovado.
 
-O remote principal `origin` aponta para `pensador999/catanaops`. Destinos anteriores foram preservados como `legacy-shopmoney` e `legacy-catanaops-bit`, sem novos envios. A pasta local permanece `catalog-ops` para preservar automações e execução existentes.
+## Limites
 
-## Ação do titular
+Plugins deste chat não são credenciais de execução do aplicativo. Service ainda usa SQLite, e fila Eve local não aparece automaticamente nas tarefas Supabase. O painel remoto é de leitura. Upload/download do pipeline e executor remoto não integrados. Vercel ainda não publicada. Orçamento zero, sem fallback pago.
 
-Reconectar o plugin Supabase autorizando a organização que possui `aqkwbmggkvvfhqaivxlh`. O acesso Git ao novo repositório já funciona. Não é necessário tornar o repositório público nem enviar senhas, tokens ou service_role no chat.
+Não mover tabelas para public apenas para fazê-las aparecer no editor. Não publicar chaves administrativas nem copiar dados locais automaticamente. Comparar histórico Git antes de enviar alterações, sem force-push.
 
-## Sequência após acesso
-
-1. Inspecionar conteúdo e branch do novo repositório antes de sincronizar; nunca force-push sobre trabalho existente.
-2. Inspecionar schemas, tabelas, políticas e usuários do projeto indicado, sem exportar dados.
-3. Preparar migração versionada de clientes, pedidos, tarefas, eventos e referências de arquivos; políticas RLS e buckets privados.
-4. Validar isolamento com identidades sintéticas e recuperação/idempotência; migrar o adaptador síncrono SQLite para operações remotas explícitas.
-5. Conectar Auth e sessão do operador, separar executor do servidor local e testar o ciclo completo.
-6. Preparar configuração Vercel e ambiente de preview; importar somente quando esses pré-requisitos estiverem verificados.
-
-A URL Supabase identifica o destino; não concede acesso nem substitui credenciais. Criar projeto e importar Git não tornam o aplicativo atual compatível com execução na nuvem. A fonte operacional permanece SQLite local até migração testada. Nenhum dado local será enviado automaticamente.
+Fonte de responsabilidades, evidências e pendências: PRONTIDAO_COPILOTO.md, gerado de src/workflow.ts. Critérios de preview: LIBERACAO_VERCEL.md. Histórico de verificações: RETOMADA.md. Referências a destinos e acessos anteriores em documentos de histórico não são configuração atual.

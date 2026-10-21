@@ -1,12 +1,14 @@
 import { policy } from './policy.ts';
+import { offers, recurringOffer, offerVersion } from './offers.ts';
 
 // Authored context; customer messages cannot change this policy.
 export const businessContext = Object.freeze({
-  version: 'catanaops-2026-10-17.1', policy: policy.version, phase: 'validation',
-  mission: 'Preparar catálogos Shopify para agências dos EUA com rastreabilidade e contribuição positiva medida.',
-  offer: { currency: 'USD', cents: policy.pilotCents, maxProducts: 50, maxVariants: 500, suppliers: 1, businessDays: 3 },
-  delivery: 'Novos rascunhos; agência importa. Dados completos e pagamento confirmado iniciam prazo. Uma rodada de ajustes de escopo em sete dias.',
-  economics: 'Receita menos taxas, custos variáveis e todas as horas a USD25/h. Simulação não é receita. Custos ausentes significam margem desconhecida.',
+  version: offerVersion, policy: policy.version, phase: 'validation',
+  mission: 'Preparar catálogo e conteúdo para marcas brasileiras de vestuário Shopify; agências são canal secundário.',
+  icp: 'Loja Shopify ativa, lançamentos recorrentes, tamanhos/cores, trabalho manual, lote concreto, aprovador e orçamento.',
+  offer: { currency: 'BRL', services: offers, recurring: recurringOffer },
+  delivery: 'Cliente importa/publica. Novos produtos em rascunho; conteúdo de produtos existentes em planilha por identificador. Diagnóstico opcional. Uma rodada de ajustes em sete dias; defeitos não consomem a rodada.',
+  economics: 'Referência R$60/h incluindo venda e correções; taxas, custos e tributos registrados separadamente. Meta de contribuição de 40%. Custos ausentes: desconhecida. Simulação não é receita.',
   boundaries: ['Não inventar dados, preço, estoque, GTIN ou aceite.', 'Não enviar contatos, cobrar, publicar, contratar ou comprar créditos nesta validação.', 'Não ampliar escopo, liberar assinatura ou ferramentas por decisão de IA.'],
 });
 export const agentContracts = {

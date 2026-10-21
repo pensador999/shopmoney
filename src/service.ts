@@ -5,13 +5,20 @@ import { Store, type Order } from './store.ts';
 import { mappingSchema, readTable, inspect, transform, qualityCheck, csv, HEADERS, hash, productHandle, type Mapping } from './catalog.ts';
 import { policy, assert, businessDays } from './policy.ts';
 import { adaptSupplier, supplierProfileSchema, type SupplierProfile } from './supplier-adapter.ts';
+import { offerSnapshot, type ServiceKind } from './offers.ts';
+import { contentRequestSchema, prepareContent, checkContent } from './brand-content.ts';
+import { processEditorial } from './service-editorial.ts';
+import { validateHandoff } from './handoffs.ts';
 
 export const gateNames = ['identity', 'mailbox', 'stripeAccount', 'usdPayment', 'bankPayout', 'shopifyImport', 'terms'] as const;
 export class Service {
   store: Store;
   constructor(store: Store) { this.store = store; }
   readiness() { const gates = this.store.setting<Record<string, string>>('gates', {}); return gateNames.map(name => ({ name, evidence: gates[name] ?? '', ready: Boolean(gates[name]) })); }
-  async create(input: { name: string; email: string; filename: string; data: Buffer; mapping: Mapping; demo?: boolean; profile?: SupplierProfile }) {
+  async create(input: { name: string; email: string; filename: string; data: Buffer; mapping: Mapping; demo?: boolean; profile?: SupplierProfile; service?: ServiceKind; content?: unknown; id?:string }) {
+    const offer=offerSnapshot(input.service ?? 'catalog');
+    assert(['catalog','combined'].includes(offer.kind), 'Use a entrada específica de diagnóstico/conteúdo.');
+    const content=offer.kind==='combined'?contentRequestSchema.parse(input.content):undefined;
     assert(/\.(csv|xlsx)$/i.test(input.filename), 'Formato não aceito.');
     const profile = input.profile ? supplierProfileSchema.parse(input.profile) : undefined;
     const mapping = mappingSchema.parse(profile?.mapping ?? input.mapping);
@@ -19,11 +26,18 @@ export class Service {
     const adapted = profile ? adaptSupplier(rawRows, profile) : undefined;
     const rows = adapted?.rows ?? rawRows;
     const report = inspect(rows, mapping);
+    assert(report.productCount<=offer.maxProducts&&report.variantCount<=offer.maxVariants,'Lote excede os limites da oferta contratada.');
+    if(content) {
+      const ids=new Set(rows.map((r:any)=>String(r[mapping.productId])));
+      assert(content.products.every(p=>ids.has(p.id)),'Conteúdo combinado deve referenciar produtos do lote.');
+    }
     return this.store.transaction(() => {
       const client = this.store.client(input.name, input.email);
+      if(content)this.store.profile(client.id,content.brand.version,content.brand);
       mapping.namespace = `${client.id}:${mapping.supplierKey}`;
-      const order: Order = { id: randomUUID(), clientId: client.id, filename: input.filename.replace(/[^\w. -]/g, '_'), demo: !!input.demo, mapping,
-        status: report.ok ? 'scoped' : 'needs_info', scopeApproved: false, amount: policy.pilotCents, currency: policy.currency,
+      const order: Order = { id: input.id??randomUUID(), clientId: client.id, filename: input.filename.replace(/[^\w. -]/g, '_'), demo: !!input.demo, mapping,
+        status: report.ok ? 'scoped' : 'needs_info', scopeApproved: false, amount: offer.cents, currency: offer.currency, offer,
+        contentInput:content, brandProfile:content?.brand,
         createdAt: new Date().toISOString(), report, revision: 0, corrections: 0, hours: 0, fees: 0, costs: 0,
         supplierProfile: adapted?.profile };
       this.store.save(order); this.store.artifact(order.id, 'original', input.data);
@@ -38,12 +52,14 @@ export class Service {
   }
   approve(id: string) {
     const o = this.store.get(id); assert(o.status === 'scoped', 'Resolva as pendências antes de aprovar o escopo.');
+    if(o.offer){const contract=validateHandoff('planner',{orderId:id,revision:o.revision,service:o.offer.kind,evidence:[hash(this.store.artifact(id,'original'))],pending:[],mappingHash:hash(JSON.stringify(o.mapping)),brandVersion:(o.brandProfile as any)?.version??'not-applicable',operatorApproval:true},{orderId:id,revision:o.revision,service:o.offer.kind});this.store.artifact(id,`planner-${o.revision}.json`,JSON.stringify(contract));}
     o.scopeApproved = true; o.status = 'awaiting_payment'; this.store.save(o); this.store.audit(id, policy.rules.scope, 'scope_approved', { mapping: o.mapping, profile: o.supplierProfile, actor: 'local_operator' }); return o;
   }
   simulatePayment(id: string) {
     const o = this.store.get(id); assert(o.demo, 'Simulação somente para pedidos demonstrativos.');
     assert(o.status === 'awaiting_payment', 'Pedido não está aguardando pagamento.');
-    o.status = 'queued'; o.dueAt = businessDays(new Date(), 3); o.receipt = 'DEMO-NO-MONEY'; this.store.save(o);
+    o.status = 'queued'; o.dueAt = businessDays(new Date(), o.offer?.days ?? 3); o.receipt = 'DEMO-NO-MONEY'; this.store.save(o);
+    if(o.offer)this.store.artifact(id,`finance-${o.revision}.json`,JSON.stringify(validateHandoff('finance',{orderId:id,revision:o.revision,service:o.offer.kind,evidence:['DEMO-NO-MONEY'],pending:[],confirmation:'simulated',amountCents:o.amount,currency:o.currency},{orderId:id,revision:o.revision,service:o.offer.kind})));
     this.store.audit(id, policy.rules.payment, 'demo_payment'); return o;
   }
   async process(id: string) {
@@ -54,13 +70,21 @@ export class Service {
       assert((o.productionAttempts ?? 0) < 3, 'Limite de execução atingido; revisão humana necessária.');
       o.productionAttempts = (o.productionAttempts ?? 0) + 1;
       o.status = 'running'; this.store.save(o);
+      if(o.offer&&['content','diagnostic'].includes(o.offer.kind)) return processEditorial(this.store,o);
       const rows = JSON.parse(this.store.artifact(id, `source-${o.revision}.json`).toString());
       const output = transform(rows, o.mapping), qa = qualityCheck(rows, output, o.mapping);
       assert(!qa.length, `Falha de qualidade: ${JSON.stringify(qa)}`);
       const content = csv(output, HEADERS);
       const manifest = { policy: policy.version, orderId: id, revision: o.revision, originalSha256: hash(this.store.artifact(id, 'original')), sourceSha256: hash(this.store.artifact(id, o.revision ? `input-${o.revision}` : 'original')), mappingSha256: hash(JSON.stringify(o.mapping)), outputSha256: hash(content), products: o.report.productCount, variants: output.length, checks: 'Passed deterministic checks; Shopify test-store import is a separate gate.', demo: o.demo };
-      const instructions = `CATALOG DELIVERY — ${o.demo ? 'SYNTHETIC DEMO' : id}\n\nNew draft products only. Back up your store first. Import a small sample into a test store, then check variants, identifiers, prices and shipping/tax defaults before any publication. Do not enable overwrite for existing handles. We do not access or modify your store. Inventory, images, shipping and tax configuration are outside this file. Missing values were not invented. Keep the CSV in UTF-8; spreadsheet applications may remove leading zeros.\n\nReply within seven calendar days for the included scope adjustment.\n`;
+      const instructions = `CATANA OPS — ${o.demo ? "DEMONSTRAÇÃO SINTÉTICA" : id}\n\nNovos produtos em rascunho. Cliente importa e publica. Faça backup e teste uma amostra; não habilite sobrescrita. Confira variantes, SKU/EAN, preços e frete/tributos. Imagens são referências não verificadas. Preserve UTF-8 e zeros à esquerda. Uma rodada de ajustes em sete dias; defeitos não consomem a rodada. Sem promessa de SEO ou conversão.\n`;
       const zip = new AdmZip();
+      if(o.offer?.kind==='combined') {
+        const brief=contentRequestSchema.parse(o.contentInput), editorial=prepareContent(brief);
+        assert(brief.products.every(p=>rows.some((r:any)=>String(r[o.mapping.productId])===p.id)),'Conteúdo fora do lote revisado.');
+        assert(checkContent(brief,editorial).length===0,'Conteúdo combinado reprovado.');
+        zip.addFile('conteudo-por-identificador.csv',Buffer.from(csv(editorial.map(p=>({ID:p.id,Title:p.title,'Body (HTML)':p.html,'SEO Title':p.seoTitle,'SEO Description':p.metaDescription})),['ID','Title','Body (HTML)','SEO Title','SEO Description'])));
+        zip.addFile('conteudo-evidencias.json',Buffer.from(JSON.stringify(editorial,null,2)));
+      }
       zip.addFile('shopify.csv', Buffer.from(content));
       zip.addFile('qa-report.json', Buffer.from(JSON.stringify({ ...manifest, issues: qa, sourceReport: o.report }, null, 2)));
       zip.addFile('source-to-output.json', Buffer.from(JSON.stringify(rows.map((r: any) => ({ sourceProduct: r[o.mapping.productId], sourceSku: r[o.mapping.sku], outputHandle: productHandle(r[o.mapping.productId], o.mapping), transformations: ['column mapping', 'draft/unpublished', 'plain description HTML escaping'] })), null, 2)));
@@ -68,8 +92,13 @@ export class Service {
         zip.addFile('supplier-profile.json', this.store.artifact(id, `profile-${o.revision}.json`));
         zip.addFile('supplier-lineage.json', this.store.artifact(id, `lineage-${o.revision}.json`));
       }
-      if (o.mapping.imageUrl) zip.addFile('media-review.json', Buffer.from(JSON.stringify(rows.map((r: any) => ({ sku: r[o.mapping.sku], productId: r[o.mapping.productId], suppliedReference: r[o.mapping.imageUrl] ?? '', status: 'Not fetched, verified or imported. Agency must confirm ownership, availability and variant association.' })), null, 2)));
+      if (o.mapping.imageUrl) zip.addFile('media-review.json', Buffer.from(JSON.stringify(rows.map((r: any) => ({ sku: r[o.mapping.sku], productId: r[o.mapping.productId], suppliedReference: r[o.mapping.imageUrl] ?? '', status: 'Referência não baixada ou importada. Cliente confirma autorização, disponibilidade e associação.' })), null, 2)));
       zip.addFile('IMPORT-INSTRUCTIONS.txt', Buffer.from(instructions));
+      if(o.offer){
+        const base={orderId:id,revision:o.revision,service:o.offer.kind,evidence:[manifest.outputSha256],pending:[]};
+        this.store.artifact(id,`production-${o.revision}.json`,JSON.stringify(validateHandoff('production',{...base,artifacts:[`shopify-${o.revision}.csv`],manifestHash:hash(JSON.stringify(manifest))},base)));
+        this.store.artifact(id,`quality-${o.revision}.json`,JSON.stringify(validateHandoff('quality',{...base,passed:true,checks:['Fonte versus saída','Identificadores','Variantes','Preços'],executor:'independent-code'},base)));
+      }
       this.store.transaction(() => {
         this.store.artifact(id, `shopify-${o.revision}.csv`, content);
         this.store.artifact(id, `delivery-${o.revision}.zip`, zip.toBuffer());
@@ -77,7 +106,7 @@ export class Service {
         this.store.audit(id, policy.rules.quality, 'qa_passed', manifest);
         const client = this.store.db.prepare('SELECT email FROM clients WHERE id=?').get(o.clientId) as any;
         o.deliveryId = `delivery-${id}-${o.revision}`; this.store.save(o);
-        this.store.enqueue(o.deliveryId, id, client.email, 'delivery', `Your Shopify catalog files — ${id}`, `Your catalog package is attached. All products are prepared as unpublished drafts. Please review IMPORT-INSTRUCTIONS.txt and test the import before use. Reply within seven calendar days for the included scope adjustment. Reference: ${id}`);
+        this.store.enqueue(o.deliveryId, id, client.email, 'delivery', `Catana Ops — arquivos do catálogo ${id}`, `Pacote preparado para revisão. Produtos em rascunho; cliente importa e publica. Leia IMPORT-INSTRUCTIONS.txt e teste uma amostra. Ajustes em sete dias. Referência: ${id}`);
       });
       return o;
     } catch (e) {
@@ -91,10 +120,10 @@ export class Service {
     assert(o.status === 'ready' && o.deliveryId === messageId, 'Entrega inválida.');
     o.status = 'delivered'; o.deliveredAt = new Date().toISOString(); this.store.save(o); this.store.audit(id, policy.rules.delivery, 'delivered', { messageId }); return o;
   }
-  async revise(id: string, data: Buffer, filename: string, mapping: Mapping) {
+  async revise(id: string, data: Buffer, filename: string, mapping: Mapping, reason:'scope-adjustment'|'defect'='scope-adjustment') {
     const o = this.store.get(id);
     assert(['needs_info', 'delivered', 'needs_attention'].includes(o.status), 'Pedido não permite revisão.');
-    if (o.deliveredAt) {
+    if (o.deliveredAt && reason==='scope-adjustment') {
       assert(Date.now() <= Date.parse(o.deliveredAt) + 7 * 86400000 && o.corrections < 1, 'Rodada de ajustes encerrada.');
       o.corrections++;
     }
@@ -103,11 +132,14 @@ export class Service {
     const rawRows = await readTable(data, extname(filename).toLowerCase(), profile ? 550 : 500, (profile?.mapping ?? mapping).csvDelimiter);
     const adapted = profile ? adaptSupplier(rawRows, profile) : undefined;
     const parsed = mappingSchema.parse(profile?.mapping ?? mapping), rows = adapted?.rows ?? rawRows, report = inspect(rows, parsed);
+    if(o.offer)assert(report.productCount<=o.offer.maxProducts&&report.variantCount<=o.offer.maxVariants,'Revisão excede o escopo contratado.');
+    if(o.offer&&o.deliveredAt){const previous=JSON.parse(this.store.artifact(id,`source-${o.revision}.json`).toString());const ids=(list:any[],key:string)=>[...new Set(list.map(r=>String(r[key])))].sort();assert(JSON.stringify(ids(previous,o.mapping.productId))===JSON.stringify(ids(rows,parsed.productId)),'Novos produtos exigem nova proposta.');}
     assert(parsed.supplierKey === o.mapping.supplierKey, 'A revisão deve manter o fornecedor original.');
     parsed.namespace = o.mapping.namespace;
     o.revision++; o.mapping = parsed; o.report = report;
     // New work makes the previous cost total incomplete until reviewed again.
     delete o.economicsRecordedAt;
+    delete o.qa; delete o.deliveryId;
     o.status = report.ok ? (o.receipt ? 'queued' : 'scoped') : 'needs_info';
     // Revised rules must be approved again before execution.
     o.scopeApproved = false;
