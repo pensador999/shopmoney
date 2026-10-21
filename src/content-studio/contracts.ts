@@ -8,6 +8,17 @@ export const studioScopeSchema=z.object({workspaceId:id,clientId:id,storeId:id})
 export type StudioScope=z.infer<typeof studioScopeSchema>;
 export const sectionSchema=z.enum(['presentation','context','fit','features','composition','care','size']);
 export const templateSchema=z.enum(['essential','editorial']);
+export const mediaViewSchema=z.enum(['front','back','detail','context','unknown']);
+export type MediaView=z.infer<typeof mediaViewSchema>;
+export function suggestMediaView(url:string,alt=''):MediaView{
+  const raw=(url.split('?')[0].split('/').pop()??'')+' '+alt;
+  const norm=raw.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[_-]+/g,' ').toLowerCase();
+  if(/\b(costas|back|verso|dorsal|traseir[oa])\b/i.test(norm))return 'back';
+  if(/\b(detalhe|detail|zoom|close|punho|gola|costura|bolso|solado|tecido)\b/i.test(norm))return 'detail';
+  if(/\b(modelo|lifestyle|contexto|uso|ambiente|humanizad[oa]|look|lookbook)\b/i.test(norm))return 'context';
+  if(/\b(frente|front|frontal)\b/i.test(norm))return 'front';
+  return 'unknown';
+}
 const color=z.string().regex(/^#[0-9a-fA-F]{6}$/);
 export const studioRequestSchema=z.object({
   version:z.literal('content-studio-1'),scope:studioScopeSchema,
@@ -27,7 +38,7 @@ export const studioRequestSchema=z.object({
   media:z.array(z.object({
     id,productId:id,url:z.string().max(2000),source:z.string().min(1).max(1000),authorized:z.boolean(),approved:z.boolean(),
     variantIds:z.array(id).max(200).default([]),color:z.string().max(100).default(''),
-    role:z.enum(['hero','detail','context']),alt:z.string().min(1).max(300),
+    role:z.enum(['hero','detail','context']),view:mediaViewSchema.default('unknown'),viewConfirmed:z.boolean().default(true),alt:z.string().min(1).max(300),
   }).strict()).max(12),
   mode:z.enum(['preserve','reorganize','rewrite']),
   blocks:z.array(z.object({id,section:sectionSchema,text:z.string().min(1).max(2000),factIds:z.array(id).min(1).max(30),approved:z.boolean()}).strict()).max(30).default([]),
@@ -72,6 +83,7 @@ export function checkRequest(input:StudioRequest){
   }
   for(const m of input.media){
     if(!m.authorized||!m.approved)add('MEDIA_PENDING','Mídia exige autorização e conferência visual pelo operador.',m.id);
+    if(m.view!=='unknown'&&!m.viewConfirmed)add('MEDIA_VIEW_PENDING','Vista da imagem ('+m.view+') sugerida pelo nome/texto exige confirmação visual pelo operador.',m.id);
     if(m.productId!==input.product.id)add('MEDIA_PRODUCT','Imagem pertence a outro produto.',m.id);
     const variants=m.variantIds.map(vid=>input.product.variants.find(v=>v.id===vid));
     if(variants.some(v=>!v))add('MEDIA_VARIANT','Imagem aponta para variante inexistente.',m.id);

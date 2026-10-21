@@ -1,5 +1,5 @@
 import {verifySnapshot,parsePage,isProductPage} from '../inspection/snapshot.ts';
-import {studioRequestSchema,type StudioRequest,type StudioScope} from './contracts.ts';
+import {studioRequestSchema,suggestMediaView,type StudioRequest,type StudioScope} from './contracts.ts';
 
 // Public observations are candidates. No factual or media approval is inferred.
 export function intakeSnapshot(snapshotInput:unknown,scope:StudioScope,brand:StudioRequest['brand']){
@@ -19,7 +19,10 @@ export function intakeSnapshot(snapshotInput:unknown,scope:StudioScope,brand:Stu
           product:{id,title:String(p.title??''),existing:true,source,original:{html:raw,text:plain.slice(0,12000),approved:false},
             variants:variants.map(v=>({id:String(v.id??''),productId:id,sku:String(v.sku??''),color:option(v,['cor','color','colour']),size:option(v,['tamanho','size'])})),
             facts:plain?[{id:'observed-description',text:plain.slice(0,1500),source,approved:false,section:'presentation'}]:[]},
-          media:(Array.isArray(p.images)?p.images as Record<string,unknown>[]:[]).slice(0,12).filter(m=>typeof m.src==='string'&&String(m.src).startsWith('https://')).map((m,index)=>({id:String(m.id??'image-'+index),productId:id,url:String(m.src),source,authorized:false,approved:false,variantIds:(Array.isArray(m.variant_ids)?m.variant_ids:[]).map(String),color:'',role:index===0?'hero':'detail',alt:String(m.alt||p.title||'Imagem do produto').slice(0,300)})),mode:'rewrite',blocks:[],adaptive:{category:String(p.product_type??'').slice(0,100),
+          media:(Array.isArray(p.images)?p.images as Record<string,unknown>[]:[]).slice(0,12).filter(m=>typeof m.src==='string'&&String(m.src).startsWith('https://')).map((m,index)=>{
+            const alt=String(m.alt||p.title||'Imagem do produto').slice(0,300),view=suggestMediaView(String(m.src),String(m.alt??''));
+            return {id:String(m.id??'image-'+index),productId:id,url:String(m.src),source,authorized:false,approved:false,variantIds:(Array.isArray(m.variant_ids)?m.variant_ids:[]).map(String),color:'',role:index===0?'hero':view==='context'?'context':'detail',view,viewConfirmed:view==='unknown',alt};
+          }),mode:'rewrite',blocks:[],adaptive:{category:String(p.product_type??'').slice(0,100),
             coverage:{kind:'public',source,observedAt:page.capturedAt,missing:['Autorização de materiais','Perfil aprovado','Revisão dos fatos observados','Associação visual de imagens']},requirements:[],conflicts:[],components:[]}};
         records.push(studioRequestSchema.parse(request));
       }catch(error){rejected.push({productId:String(p.id??''),reason:String(error).slice(0,500)});}

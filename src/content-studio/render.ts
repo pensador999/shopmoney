@@ -6,7 +6,7 @@ const headings={presentation:'A peça',context:'Como usar',fit:'Caimento',featur
 export function planContent(input:StudioRequest){
   const blocks=input.mode==='preserve'?[{id:'original',section:'presentation' as const,text:input.product.original.text,factIds:input.product.facts.map(f=>f.id),approved:input.product.original.approved}]:
     input.blocks.length?input.blocks:input.product.facts.map(f=>({id:f.id,section:f.section,text:f.text,factIds:[f.id],approved:f.approved}));
-  return {mode:input.mode,blocks,media:input.media.map(m=>({id:m.id,role:m.role,color:m.color,variantIds:m.variantIds})),limits:['Blocos opcionais, sem preenchimento de fatos ausentes.','Análise visual é do operador.','Não comprova integração com tema Shopify.']};
+  return {mode:input.mode,blocks,media:input.media.map(m=>({id:m.id,role:m.role,view:m.view??'unknown',color:m.color,variantIds:m.variantIds})),limits:['Blocos opcionais, sem preenchimento de fatos ausentes.','Análise visual é do operador.','Não comprova integração com tema Shopify.']};
 }
 export function renderDescription(input:StudioRequest,templateInput:unknown,options:{original?:boolean;selectedColor?:string}={}){
   const template=templateSchema.parse(templateInput),plan=planContent(input),v=input.brand.visual;
@@ -20,7 +20,12 @@ export function renderDescription(input:StudioRequest,templateInput:unknown,opti
     return input.brand.materialAuthorization&&m.authorized&&m.approved&&!issues.some(i=>i.subject===m.id)&&(!selectedColor||!color||color===selectedColor);
   });
   const usedMedia=new Set<string>();
-  const image=(role:string,id?:string)=>{const m=safeMedia.find(m=>(id?m.id===id:m.role===role)&&!usedMedia.has(m.url));if(m)usedMedia.add(m.url);return m?'<figure><img src="'+escape(m.url)+'" alt="'+escape(m.alt)+'" loading="lazy"><figcaption>'+escape(m.alt)+'</figcaption></figure>':'';};
+  const image=(role:string,id?:string)=>{
+    const m=id?safeMedia.find(m=>m.id===id&&!usedMedia.has(m.url)):
+      (role==='hero'?safeMedia.find(m=>m.role==='hero'&&m.view!=='back'&&!usedMedia.has(m.url)):undefined)??safeMedia.find(m=>m.role===role&&!usedMedia.has(m.url));
+    if(m)usedMedia.add(m.url);
+    return m?'<figure><img src="'+escape(m.url)+'" alt="'+escape(m.alt)+'" loading="lazy"><figcaption>'+escape(m.alt)+'</figcaption></figure>':'';
+  };
   const sections=order.map(section=>{const blocks=plan.blocks.filter(b=>b.section===section);return blocks.length?'<section><h3>'+headings[section as keyof typeof headings]+'</h3>'+blocks.map(b=>'<p>'+escape(b.text).replace(/\n/g,'<br>')+'</p>').join('')+'</section>':'';});
   const css='[data-catana-description]{--accent:'+v.accent+';--surface:'+v.background+';--ink:'+v.text+';color:var(--ink);background:var(--surface);font-family:'+(v.font==='serif'?'Georgia,serif':'system-ui,sans-serif')+';line-height:1.65;overflow-wrap:anywhere;max-width:960px;margin:auto;padding:clamp(18px,4vw,46px);box-sizing:border-box;border-radius:'+v.radius+'px}'+
     '[data-catana-description] *{box-sizing:border-box}[data-catana-description] h2{font-size:clamp(25px,4vw,40px);line-height:1.15;margin:12px 0 22px}[data-catana-description] h3{font-size:18px;color:var(--accent);margin:24px 0 10px}[data-catana-description] p{white-space:pre-wrap;margin:10px 0}[data-catana-description] figure{margin:18px 0}[data-catana-description] img{display:block;width:100%;max-height:510px;object-fit:contain;border-radius:'+v.radius+'px}[data-catana-description] figcaption{font-size:12px;margin-top:8px}[data-catana-description] .catana-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:30px}[data-catana-description] .catana-label{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}@media(max-width:640px){[data-catana-description] .catana-columns{grid-template-columns:1fr;gap:8px}}';
