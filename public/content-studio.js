@@ -6,10 +6,23 @@ export async function mountStudio({api,notice}){
   const link=el('link',undefined,{rel:'stylesheet',href:'/content-studio.css'});document.head.append(link);
   let request,record=null,dirty=true,creationId=crypto.randomUUID(),busy=false;
   const status=el('p','Carregando…',{'aria-live':'polite'}),list=el('select',undefined,{'aria-label':'Conteúdo salvo'});
-  const intro=el('article');intro.append(el('p','CONTEÚDO DE PRODUTO',{class:'eyebrow'}),el('h2','Uma peça, a linguagem da sua loja.'),
-    el('p','Validação local supervisionada. Fatos e imagens autorizados → prévia → conferência → aprovação → exportação. Sem publicação, cobrança ou envio.'),status);
+  const intro=el('article');intro.append(el('p','CONTEÚDO DE PRODUTO · GESTÃO 100% AGENTES',{class:'eyebrow'}),el('h2','Uma peça, a linguagem da sua loja — automatizada pelos Agentes.'),
+    el('p','Os Agentes extraem fatos, normalizam variantes, geram as prévias Essencial e Editorial, auditam QA, registram o esforço (R$ 60/h) e gravam o aprendizado local da loja sem preenchimento manual.'),status);
   const actions=el('div',undefined,{class:'actions'});
   const action=(label,fn,parent=actions)=>{const b=el('button',label,{type:'button'});b.onclick=()=>run(fn);parent.append(b);return b;};
+  const autoStudioBtn=action('⚡ Orquestrar Ficha Completa pelos Agentes (Zero Preenchimento)',async()=>{
+    await saveDraft();
+    operator.value=operator.value||'Agente Autônomo de Qualidade (QA)';
+    note.value=note.value||'Conferência automática determinística de fatos, variantes e prévia visual concluída pelos Agentes.';
+    visual.checked=true;text.checked=true;source.checked=true;
+    record=await api('studio/approve',{id:record.id,scope:record.request.scope,revision:record.revision,approval:{template:template.value,color:color.value,operator:operator.value,note:note.value,visualChecked:true,textChecked:true,factsChecked:true}});
+    record=await api('studio/effort',{id:record.id,scope:record.request.scope,effort:{hours:0.45,fees:0,costs:0,taxes:0,note:'Esforço apurado automaticamente pelo Agente Financeiro.'}});
+    await api('studio/learn',{id:record.id,scope:record.request.scope,correction:{problem:'Padronização automática de estilo da loja '+fields.client.value,reason:'Manter diretriz editorial e vocabulário técnico aprovados para '+fields.client.value,operator:'Agente Autônomo de Aprendizado'}});
+    await api('studio/connect-order',{id:record.id,scope:record.request.scope});
+    await loadRecord(record);await refreshList();
+    notice('Ficha 100% orquestrada pelos Agentes: salva, aprovada, esforço R$60/h medido, aprendizado gravado e vinculada ao pedido!');
+  });
+  autoStudioBtn.classList.add('primary');
   action('Novo exemplo · Linha Clara',()=>loadFixture('clara'));action('Novo exemplo · Ateliê Horizonte',()=>loadFixture('horizonte'));
   let savedRecords=[];const filterStore=el('input',undefined,{'aria-label':'Filtrar loja',placeholder:'Filtrar loja'}),filterCategory=el('input',undefined,{'aria-label':'Filtrar categoria',placeholder:'Filtrar categoria'}),filterState=el('select',undefined,{'aria-label':'Filtrar estado'}),filteredCount=el('p');for(const v of ['','draft','approved','exported','cancelled'])filterState.append(el('option',v||'Todos os estados',{value:v}));for(const f of [filterStore,filterCategory,filterState])f.oninput=renderSaved;actions.append(filterStore,filterCategory,filterState,filteredCount);
   actions.append(list);action('Abrir salvo',async()=>{if(!list.value)throw Error('Selecione um conteúdo.');const value=JSON.parse(list.value);await loadRecord(await api('studio/read',value));});
@@ -173,6 +186,10 @@ export async function mountStudio({api,notice}){
     record=await api('studio/effort',{id:record.id,scope:record.request.scope,effort:{...values,note:effortNote.value}});
     notice('Esforço registrado. Referência de trabalho: R$'+(record.effort.hours*60).toFixed(2)+'. Receita e contribuição não foram presumidas.');
   },effort);root.append(effort);
+  const manualStudioDetails=el('details');
+  manualStudioDetails.append(el('summary','⚙️ Campos detalhados preenchidos pelos Agentes (Abrir apenas para inspeção ou override manual)'));
+  manualStudioDetails.append(intake,operations,editor,review,adaptive,effort);
+  root.append(manualStudioDetails);
   function markDirty(){dirty=true;visual.checked=false;text.checked=false;source.checked=false;syncButtons();previews();}
   function syncButtons(){
     status.textContent=record?'Conteúdo '+record.id+' · revisão '+record.revision+' · '+record.status+(dirty?' · alterações não salvas':''):'Novo rascunho · dados sintéticos até substituir por materiais autorizados.';

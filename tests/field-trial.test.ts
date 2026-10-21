@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runFieldTrials } from '../src/field-trial.ts';
+import { Store } from '../src/store.ts';
+import { runAgentAutopilot } from '../src/autopilot.ts';
 
 test('ensaio de campo multi-lojas valida adaptação, fronteira de demanda, ML local supervisionado e 8 handoffs', async () => {
   const summary = await runFieldTrials(false);
@@ -14,4 +16,23 @@ test('ensaio de campo multi-lojas valida adaptação, fronteira de demanda, ML l
   assert.equal(summary.actualRevenueBRL, 0);
   assert(summary.checks.length >= 5);
   assert.equal(summary.observations.length, 3);
+});
+
+test('piloto automático (autopilot) executa os 8 agentes fim a fim com zero preenchimento manual', async () => {
+  const store = new Store(':memory:');
+  try {
+    const res = await runAgentAutopilot(store);
+    assert.equal(res.ok, true);
+    assert.equal(res.client.name, 'Atelier Linha Clara');
+    assert.equal(res.autoDetected.delimiter, ';');
+    assert.equal(res.autoDetected.priceDecimalSeparator, ',');
+    assert(res.autoDetected.mappingConfidence >= 0.75);
+    assert.equal(res.steps.length, 8);
+    assert.equal(res.handoffs.verifiedRoles.length, 8);
+    assert.equal(res.reconciliation.ok, true);
+    assert.equal(res.reconciliation.matchedSkus, 5);
+    assert(res.economics.contribution! > 400);
+  } finally {
+    store.close();
+  }
 });

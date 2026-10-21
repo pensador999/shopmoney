@@ -23,6 +23,7 @@ import { orderAssignment, orderAgentRequest } from './coordination.ts';
 import { offers, recurringOffer } from './offers.ts';
 import { createEditorial, reviseEditorial } from './service-editorial.ts';
 import { proposeLearning, reviewLearning, inferSupplierMapping, predictApparelCategory, evaluateStoreAdaptation } from './learning.ts';
+import { runAgentAutopilot, detectCsvFormat } from './autopilot.ts';
 import { ContentStudio } from './content-studio/service.ts';
 import { studioScopeSchema,templateSchema,checkRequest } from './content-studio/contracts.ts';
 import { studioFixture,fixtureSvg } from './content-studio/fixtures.ts';
@@ -128,7 +129,19 @@ export function createApp(store: Store, port = 4318) {
         integrations: { ai: process.env.AI_ENABLED === 'true', email: !!process.env.GMAIL_USER, send: process.env.MAIL_SEND_ENABLED === 'true', stripe: !!process.env.STRIPE_RESTRICTED_KEY, relay: !!process.env.PUBLIC_URL }, mapping: demoMapping,
       };
       else if (req.method === 'POST' && path === '/api/demo') result = await runDemo(store);
-      else if (req.method === 'POST' && path === '/api/preview') { const rows = await readTable(Buffer.from(z.string().parse(body.data), 'base64'), extname(z.string().parse(body.filename)).toLowerCase(), 550, z.enum([',',';']).default(',').parse(body.delimiter)); const columns = Object.keys(rows[0] ?? {}); result = { columns, rows: rows.length, inferred: inferSupplierMapping(store, String(body.clientId ?? 'local'), columns, String(body.supplierKey ?? 'fornecedor-local')) }; }
+      else if (req.method === 'POST' && path === '/api/autopilot') result = await runAgentAutopilot(store, { filename: body.filename ? String(body.filename) : undefined, dataBase64: body.data ? String(body.data) : undefined, storeName: body.name ? String(body.name) : undefined, email: body.email ? String(body.email) : undefined, storeUrl: body.storeUrl ? String(body.storeUrl) : undefined });
+      else if (req.method === 'POST' && path === '/api/preview') {
+        const rawBuf = Buffer.from(z.string().parse(body.data), 'base64');
+        const fname = z.string().parse(body.filename);
+        const autoFmt = detectCsvFormat(rawBuf, fname);
+        const delim = body.autoDetect ? autoFmt.delimiter : z.enum([',',';']).default(autoFmt.delimiter).parse(body.delimiter);
+        const rows = await readTable(rawBuf, extname(fname).toLowerCase(), 550, delim);
+        const columns = Object.keys(rows[0] ?? {});
+        const vendorCol = columns.find(h => /marca|vendor|fabricante|brand|loja/i.test(h));
+        const detectedBrand = (vendorCol && String(rows[0]?.[vendorCol] ?? '').trim()) || fname.replace(/\.(csv|xlsx)$/i, '').replace(/[-_]+/g, ' ') || 'Loja Identificada';
+        const slug = detectedBrand.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'loja';
+        result = { columns, rows: rows.length, detectedFormat: { ...autoFmt, detectedBrand, detectedEmail: `operacao@${slug}.com.br` }, inferred: inferSupplierMapping(store, String(body.clientId ?? 'local'), columns, String(body.supplierKey ?? `fornecedor-${slug}`)) };
+      }
       else if (req.method === 'POST' && path === '/api/orders') result = await service.create({ ...z.object({ name: z.string().min(1), email: z.email(), filename: z.string().max(200), data: z.string(), mapping: mappingSchema, profile: supplierProfileSchema.optional(), demo: z.boolean().default(false), service:z.enum(['catalog','combined']).default('catalog'),content:z.unknown().optional() }).parse(body), data: Buffer.from(body.data, 'base64') });
       else if (req.method === 'POST' && path === '/api/editorial') result=createEditorial(store,z.object({name:z.string().min(1),email:z.email(),service:z.enum(['diagnostic','content']),brief:z.unknown(),demo:z.literal(true)}).parse(body));
       else if (req.method === 'POST' && path === '/api/editorial/revise') result=reviseEditorial(store,z.string().parse(body.id),body.brief,z.enum(['scope-adjustment','defect']).parse(body.reason));
