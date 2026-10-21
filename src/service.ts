@@ -8,7 +8,7 @@ import { adaptSupplier, supplierProfileSchema, type SupplierProfile } from './su
 import { offerSnapshot, type ServiceKind, type OperationalStage } from './offers.ts';
 import { contentRequestSchema, prepareContent, checkContent } from './brand-content.ts';
 import { processEditorial } from './service-editorial.ts';
-import { recordHandoff } from './handoffs.ts';
+import { recordHandoff, autoLinkLeadHandoffs } from './handoffs.ts';
 import { applyOrderEconomics } from './order-workflow.ts';
 import { ContentStudio } from './content-studio/service.ts';
 import { StudioOperations } from './content-studio/operations.ts';
@@ -49,6 +49,7 @@ export class Service {
         this.store.artifact(order.id, 'profile-0.json', JSON.stringify(profile));
         this.store.artifact(order.id, 'lineage-0.json', JSON.stringify(adapted.lineage));
       }
+      autoLinkLeadHandoffs(this.store, order.id, input.email);
       this.store.audit(order.id, policy.rules.scope, order.status, { originalSha256: hash(input.data), report });
       return order;
     });

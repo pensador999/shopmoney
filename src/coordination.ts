@@ -4,6 +4,7 @@ import { orderTasks, economics } from './order-workflow.ts';
 import { businessContext, agentContracts, type AgentRole } from './business-context.ts';
 import { agentPlaybook } from './agent-playbooks.ts';
 import { inspectionReferenceSchema, verifyOrderInspection } from './inspection/evidence.ts';
+import { orderHandoffLedger } from './handoffs.ts';
 
 export function orderAssignment(o: Order) {
   const assignments: Record<string, [AgentRole, string]> = {
@@ -41,6 +42,9 @@ export function orderAgentRequest(store: Store, id: string) {
     }catch{inspection={state:'blocked',snapshotId:reference.snapshotId??null,reason:'Evidência não verificada para este pedido/revisão; solicitar revisão ao operador.'};}
   }
   const playbookVersion = agentPlaybook(assignment.role,o.offer?.kind).version;
+  const handoffs = orderHandoffLedger(store, o.id);
+  const recRow = store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id, `reconciliation-${o.revision}.json`) as any;
+  const reconciliation = recRow ? JSON.parse(Buffer.from(recRow.data).toString()) : null;
   const key = `${businessContext.version}:${playbookVersion}:${o.id}:${o.revision}:${o.status}:${o.economicsRecordedAt ?? ''}:${JSON.stringify(inspection)}`;
   return { id: `order-advice-${createHash('sha256').update(key).digest('hex').slice(0,32)}`,
     role: assignment.role, clientId: o.clientId,
@@ -53,6 +57,8 @@ export function orderAgentRequest(store: Store, id: string) {
         structuralIssues: (o.report?.issues ?? []).slice(0,10),
         mapping: o.mapping, supplierProfile: o.supplierProfile ?? null,
         inspection,
+        handoffs: { verifiedRoles: handoffs.verifiedRoles, missingRoles: handoffs.missingRoles },
+        reconciliation: reconciliation ? { ok: reconciliation.ok, matchedSkus: reconciliation.matchedSkus, issueCount: reconciliation.issues?.length ?? 0, evidenceHash: reconciliation.evidenceHash } : null,
         quality: o.qa ? { executor: 'deterministic-qualityCheck', completed: true, report: o.qa } : { completed: false },
         deliveredAt: o.deliveredAt ?? null, closedAt: o.closedAt ?? null,
         paymentMode: o.demo ? 'simulation' : o.paymentMode ?? 'unconfirmed',

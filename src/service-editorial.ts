@@ -6,7 +6,7 @@ import { offerSnapshot } from './offers.ts';
 import { contentRequestSchema, prepareContent, checkContent, validateBrief } from './brand-content.ts';
 import { hash, csv } from './catalog.ts';
 import { assert } from './policy.ts';
-import { validateHandoff, recordHandoff } from './handoffs.ts';
+import { validateHandoff, recordHandoff, autoLinkLeadHandoffs } from './handoffs.ts';
 import { inspectionBrief, inspectionReferenceSchema, verifyOrderInspection } from './inspection/evidence.ts';
 
 export const diagnosticObservationSchema=z.object({subject:z.string().min(1).max(200),category:z.enum(['observed','hypothesis','needs_internal_evidence']),finding:z.string().min(1).max(2000),evidence:z.array(z.object({source:z.string().min(1).max(1000),note:z.string().min(1).max(1000)}).strict()).min(1).max(5),nextAction:z.string().min(1).max(1000)}).strict();
@@ -22,6 +22,7 @@ export function createEditorial(store:Store,input:{name:string;email:string;serv
     if('brand' in brief)store.profile(client.id,brief.brand.version,brief.brand);
     const raw=JSON.stringify(brief);
     store.save(o);store.artifact(o.id,'original',raw);store.artifact(o.id,'brief-0.json',raw);
+    autoLinkLeadHandoffs(store,o.id,input.email);
     store.audit(o.id,'SCOPE-01','editorial_received',{service:input.service,offerVersion:offer.version});return o;
   };
   return store.db.isTransaction?create():store.transaction(create);

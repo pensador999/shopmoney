@@ -113,7 +113,10 @@ export function createApp(store: Store, port = 4318) {
       }
       else if (req.method === 'GET' && path === '/api/state') result = {
         fieldCase:existsSync(new URL('../artifacts/field-case-summary.json',import.meta.url))?JSON.parse(readFileSync(new URL('../artifacts/field-case-summary.json',import.meta.url),'utf8')):null,
-        orders: store.orders().map(o => ({ ...o, economics: economics(o), tasks: orderTasks(o), handoffs: orderHandoffLedger(store, o.id) })), gates: service.readiness(), policy, formats: supportedFormats(), offers, recurringOffer,
+        orders: store.orders().map(o => {
+          const recRow = store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id, `reconciliation-${o.revision}.json`) as any;
+          return { ...o, economics: economics(o), tasks: orderTasks(o), handoffs: orderHandoffLedger(store, o.id), reconciliation: recRow ? JSON.parse(Buffer.from(recRow.data).toString()) : null };
+        }), gates: service.readiness(), policy, formats: supportedFormats(), offers, recurringOffer,
         coordination: store.orders().map(orderAssignment), team: agentContracts, business: businessContext,
         messages: store.db.prepare('SELECT * FROM outbox ORDER BY created_at DESC LIMIT 100').all(),
         inbox: store.db.prepare('SELECT * FROM inbox ORDER BY received_at DESC LIMIT 100').all(),

@@ -29,12 +29,33 @@ export function recordPreSaleHandoffs(store:Store,orderId:string,input:{fit:'qua
   if(!o.offer)throw Error('Pedido sem oferta brasileira versionada.');
   const expected={orderId:o.id,revision:o.revision,service:o.offer.kind};
   const evidence=input.evidence?.length?input.evidence:input.sources;
-  return store.transaction(()=>{
+  const work=()=>{
     const research=recordHandoff(store,'research',{...expected,evidence,pending:[],fit:input.fit,sources:input.sources},expected);
     const sales=recordHandoff(store,'sales',{...expected,evidence:[research.hash],pending:[],need:input.need,buyer:input.buyer,scope:input.scope},expected);
     store.audit(o.id,'SALES-01','presale_handoffs_recorded',{revision:o.revision,researchHash:research.hash,salesHash:sales.hash});
     return {research,sales};
-  });
+  };
+  return store.db.isTransaction?work():store.transaction(work);
+}
+export function autoLinkLeadHandoffs(store:Store,orderId:string,email:string) {
+  const row=store.db.prepare('SELECT data FROM leads WHERE email=? ORDER BY rowid DESC LIMIT 1').get(email.trim().toLowerCase()) as any;
+  if(!row)return null;
+  try{
+    const data=JSON.parse(row.data);
+    if(!data.qualified)return null;
+    const o=store.get(orderId);
+    if(!o.offer)return null;
+    const sources=[data.website,data.source,data.contactSource].filter((u:unknown)=>typeof u==='string'&&u.startsWith('https://'));
+    if(!sources.length)return null;
+    return recordPreSaleHandoffs(store,orderId,{
+      fit:'qualified',
+      sources,
+      need:String(data.evidence??'Necessidade observada na qualificação comercial'),
+      buyer:String(data.name??email),
+      scope:`${o.offer.name} (até ${o.offer.maxProducts} produtos / ${o.offer.maxVariants} variantes)`,
+      evidence:[String(data.evidence??sources[0])],
+    });
+  }catch{return null;}
 }
 export function orderHandoffLedger(store:Store,orderId:string) {
   const o=store.get(orderId);

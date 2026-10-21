@@ -14,6 +14,8 @@ import {intakeSnapshot} from '../src/content-studio/intake.ts';
 import {collectProductPages} from '../src/inspection/collector.ts';
 import {recordPreSaleHandoffs,orderHandoffLedger} from '../src/handoffs.ts';
 import {economics} from '../src/order-workflow.ts';
+import {addLead} from '../src/mail.ts';
+import {orderAgentRequest} from '../src/coordination.ts';
 const approval={template:'essential',color:'Areia',operator:'Teste sintético',note:'Revisão sintética sem aceite de cliente.',visualChecked:true,textChecked:true,factsChecked:true};
 function setup(){const store=new Store(':memory:'),client=store.client('Fixture','fixture@test.invalid'),studio=new ContentStudio(store),request=studioFixture({workspaceId:'local',clientId:client.id,storeId:'loja'});return{store,studio,request};}
 test('pedido vinculado é idempotente, isolado e cancelamento impede aprovação editorial',()=>{
@@ -183,5 +185,15 @@ test('ponte de lote LeakFinder e conciliador pós-importação Shopify validam m
   const okRec=service.reconcileImport(catReady.id,generatedShopifyCsv,true);
   assert.equal(okRec.ok,true);
   assert(store.setting<Record<string,string>>('gates',{}).shopifyImport?.includes(okRec.evidenceHash));
+  const agentReq=orderAgentRequest(store,catReady.id);
+  assert.equal((agentReq.input.evidence as any).reconciliation?.ok,true);
+  assert((agentReq.input.evidence as any).handoffs?.verifiedRoles.includes('quality'));
+  const leadId=addLead(store,{name:'Atelier Harmonia',email:'harmonia@loja.com.br',website:'https://harmonia.example.com',source:'https://harmonia.example.com/products',contactSource:'https://harmonia.example.com/contato',evidence:'Loja Shopify de vestuário com 18 peças sem tabela de medidas padronizada.'});
+  const leadRow=store.db.prepare('SELECT data FROM leads WHERE id=?').get(leadId) as any;
+  store.db.prepare('UPDATE leads SET data=? WHERE id=?').run(JSON.stringify({...JSON.parse(leadRow.data),qualified:true}),leadId);
+  const harmonizedOrder=await service.create({name:'Atelier Harmonia',email:'harmonia@loja.com.br',service:'catalog',demo:true,filename:'harmonia.csv',data:Buffer.from('SKU,Produto,Cor,Tamanho,Preco,GTIN,Descricao\nSKU-H1,Vestido Linho,Areia,P,289.90,7891234567895,Linho puro\n'),mapping:{supplierKey:'harmonia',productId:'Produto',title:'Produto',sku:'SKU',options:[{name:'Cor',column:'Cor'},{name:'Tamanho',column:'Tamanho'}],price:'Preco',barcode:'GTIN',description:'Descricao'}});
+  const harmLedger=orderHandoffLedger(store,harmonizedOrder.id);
+  assert(harmLedger.verifiedRoles.includes('research'));
+  assert(harmLedger.verifiedRoles.includes('sales'));
  }finally{store.close();}
 });
