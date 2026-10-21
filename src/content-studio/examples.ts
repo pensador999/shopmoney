@@ -22,10 +22,19 @@ export class Examples {
   }
   retrieve(scope:StudioScope,category:string,query:string,excludeProduct:string){
     const q=tokens(query);
-    return this.list(scope).filter(v=>v.active&&v.category===category&&v.productId!==excludeProduct).map(v=>{
-      const t=tokens(v.problem+' '+v.reason+' '+JSON.stringify(v.blocks));
-      const overlap=[...q].filter(w=>t.has(w)).length;
-      return {...v,score:overlap/Math.max(1,new Set([...q,...t]).size)};
+    const candidates=this.list(scope).filter(v=>v.active&&v.category===category&&v.productId!==excludeProduct);
+    const docSets=candidates.map(v=>({v,t:tokens(v.problem+' '+v.reason+' '+JSON.stringify(v.blocks))}));
+    const N=Math.max(1,docSets.length);
+    const idf=(term:string)=>{
+      const df=docSets.filter(d=>d.t.has(term)).length;
+      return Math.log(1+(N-df+0.5)/(df+0.5))+1;
+    };
+    return docSets.map(({v,t})=>{
+      const matched=[...q].filter(w=>t.has(w));
+      if(!matched.length)return {...v,score:0};
+      const weightedOverlap=matched.reduce((sum,w)=>sum+idf(w),0);
+      const unionWeight=[...new Set([...q,...t])].reduce((sum,w)=>sum+idf(w),0);
+      return {...v,score:Number((weightedOverlap/Math.max(1,unionWeight)).toFixed(4))};
     }).filter(v=>v.score>0).sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id)).slice(0,2).map(v=>({id:v.id,score:v.score,reason:v.reason,blocks:v.blocks}));
   }
 }

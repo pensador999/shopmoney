@@ -20,7 +20,8 @@
     "demo:inspection": "node src/simulate-inspection.ts",
     "test:inspection": "node --test tests/leakfinder.test.ts tests/inspection-product.test.ts",
     "demo:content": "node src/simulate-content-studio.ts",
-    "panel:content": "node scripts/serve-content-studio.ts"
+    "panel:content": "node scripts/serve-content-studio.ts",
+    "field:trial": "node src/field-trial.ts"
   },
   "dependencies": {
     "@vercel/connect": "2.5.2",
