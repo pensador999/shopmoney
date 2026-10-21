@@ -4,7 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { policy, assert } from './policy.ts';
 import { orderTasks } from './order-workflow.ts';
-import type { OfferSnapshot } from './offers.ts';
+import type { OfferSnapshot, OperationalStage } from './offers.ts';
 
 export type Order = {
   id: string; clientId: string; status: string; demo: boolean; filename: string;
@@ -13,6 +13,7 @@ export type Order = {
   closedAt?: string; checkoutId?: string; checkoutUrl?: string; paymentIntent?: string;
   report?: any; qa?: any; revision: number; corrections: number; deliveryId?: string;
   hours: number; fees: number; costs: number; receipt?: string; error?: string;
+  stageHours?: Partial<Record<OperationalStage, number>>;
   paymentMode?: 'test' | 'live';
   supplierProfile?: { id: string; version: string };
   economicsRecordedAt?: string; economicsNote?: string; productionAttempts?: number;

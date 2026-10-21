@@ -6,7 +6,7 @@ import { offerSnapshot } from './offers.ts';
 import { contentRequestSchema, prepareContent, checkContent, validateBrief } from './brand-content.ts';
 import { hash, csv } from './catalog.ts';
 import { assert } from './policy.ts';
-import { validateHandoff } from './handoffs.ts';
+import { validateHandoff, recordHandoff } from './handoffs.ts';
 import { inspectionBrief, inspectionReferenceSchema, verifyOrderInspection } from './inspection/evidence.ts';
 
 export const diagnosticObservationSchema=z.object({subject:z.string().min(1).max(200),category:z.enum(['observed','hypothesis','needs_internal_evidence']),finding:z.string().min(1).max(2000),evidence:z.array(z.object({source:z.string().min(1).max(1000),note:z.string().min(1).max(1000)}).strict()).min(1).max(5),nextAction:z.string().min(1).max(1000)}).strict();
@@ -20,7 +20,8 @@ export function createEditorial(store:Store,input:{name:string;email:string;serv
     const o:Order={id:input.id??randomUUID(),clientId:client.id,status:issues.length?'needs_info':'scoped',demo:input.demo,filename:'brief.json',mapping:{},scopeApproved:false,amount:offer.cents,currency:offer.currency,offer,
       createdAt:new Date().toISOString(),report:{ok:issues.length===0,issues,productCount:brief.products.length,variantCount:0},revision:0,corrections:0,hours:0,fees:0,costs:0,contentInput:brief,brandProfile:'brand' in brief?brief.brand:undefined};
     if('brand' in brief)store.profile(client.id,brief.brand.version,brief.brand);
-    store.save(o);store.artifact(o.id,'original',JSON.stringify(brief));store.artifact(o.id,'brief-0.json',JSON.stringify(brief));
+    const raw=JSON.stringify(brief);
+    store.save(o);store.artifact(o.id,'original',raw);store.artifact(o.id,'brief-0.json',raw);
     store.audit(o.id,'SCOPE-01','editorial_received',{service:input.service,offerVersion:offer.version});return o;
   };
   return store.db.isTransaction?create():store.transaction(create);
@@ -53,10 +54,13 @@ export function processEditorial(store:Store,o:Order){
     checks=['Até 10 produtos','Fontes por produto','Separação entre observado e informação interna',...(inspection?['Hash dos snapshots','Campos protegidos versus JSON original','Evidências por JSON pointer','Revisão do operador','Cliente/workspace e revisão do pedido']:[])];
   }
   const manifest={orderId:o.id,revision:o.revision,service:o.offer!.kind,inputHash:hash(JSON.stringify(input)),offerVersion:o.offer!.version,demo:o.demo,checks,executor:'independent-code'};
+  const prodArtifacts=o.offer!.kind==='content'?['conteudo.csv','evidencias.json']:['diagnostico.json'];
   const handoff=validateHandoff('quality',{...expected,evidence:[manifest.inputHash],pending:[],passed:true,checks,executor:'independent-code'},expected);
   zip.addFile('manifest.json',Buffer.from(JSON.stringify(manifest,null,2)));
   zip.addFile('LEIA-ME.txt',Buffer.from('Entrega para revisão e aplicação pelo cliente. Não importamos nem publicamos na loja. Conteúdo usa fatos e textos aprovados; não é promessa de SEO/conversão. Uma rodada de ajustes de escopo em sete dias. Defeitos da entrega não consomem a rodada.'));
   store.transaction(()=>{
+    recordHandoff(store,'production',{...expected,evidence:[manifest.inputHash],pending:[],artifacts:prodArtifacts,manifestHash:hash(JSON.stringify(manifest))},expected);
+    recordHandoff(store,'quality',{...expected,evidence:[manifest.inputHash],pending:[],passed:true,checks,executor:'independent-code'},expected);
     store.artifact(o.id,`delivery-${o.revision}.zip`,zip.toBuffer());store.artifact(o.id,`handoff-${o.revision}.json`,JSON.stringify(handoff));
     o.status='ready';o.qa=manifest;o.deliveryId=`delivery-${o.id}-${o.revision}`;delete o.error;store.save(o);store.audit(o.id,'QA-01','editorial_qa_passed',manifest);
     const client=store.db.prepare('SELECT email FROM clients WHERE id=?').get(o.clientId) as any;
@@ -78,5 +82,10 @@ export function reviseEditorial(store:Store,id:string,input:unknown,reason:'scop
   o.report={ok:issues.length===0,issues,productCount:brief.products.length,variantCount:0};
   o.contentInput=brief;o.brandProfile='brand' in brief?brief.brand:undefined;
   o.status=issues.length?'needs_info':o.receipt?'revision_approval':'scoped';
-  store.transaction(()=>{if('brand' in brief)store.profile(o.clientId,brief.brand.version,brief.brand);store.artifact(id,`brief-${o.revision}.json`,JSON.stringify(brief));store.save(o);store.audit(id,'SCOPE-01','editorial_revision',{reason,revision:o.revision});});return o;
+  const raw=JSON.stringify(brief);
+  store.transaction(()=>{
+    if('brand' in brief)store.profile(o.clientId,brief.brand.version,brief.brand);
+    store.artifact(id,`brief-${o.revision}.json`,raw);
+    store.save(o);store.audit(id,'SCOPE-01','editorial_revision',{reason,revision:o.revision});
+  });return o;
 }

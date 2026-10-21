@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { hash } from './catalog.ts';
 import type { AgentRole } from './business-context.ts';
+import type { Store } from './store.ts';
 
 const common={orderId:z.uuid(),revision:z.number().int().nonnegative(),service:z.enum(['diagnostic','content','catalog','combined']),evidence:z.array(z.string().min(1)).min(1),pending:z.array(z.string()),};
 export const handoffSchemas={
@@ -17,6 +18,46 @@ export function validateHandoff(role:AgentRole,input:unknown,expected:{orderId:s
   const parsed=handoffSchemas[role].parse(input);
   if(parsed.orderId!==expected.orderId||parsed.revision!==expected.revision||parsed.service!==expected.service||parsed.pending.length) throw Error('Passagem bloqueada: revisão, serviço ou pendências divergentes.');
   return {...parsed,role,hash:hash(JSON.stringify(parsed))};
+}
+export function recordHandoff(store:Store,role:AgentRole,input:unknown,expected:{orderId:string;revision:number;service:string}) {
+  const validated=validateHandoff(role,input,expected);
+  store.artifact(expected.orderId,`${role}-${expected.revision}.json`,JSON.stringify(validated));
+  return validated;
+}
+export function recordPreSaleHandoffs(store:Store,orderId:string,input:{fit:'qualified'|'unverified'|'declined';sources:string[];need:string;buyer:string;scope:string;evidence?:string[]}) {
+  const o=store.get(orderId);
+  if(!o.offer)throw Error('Pedido sem oferta brasileira versionada.');
+  const expected={orderId:o.id,revision:o.revision,service:o.offer.kind};
+  const evidence=input.evidence?.length?input.evidence:input.sources;
+  return store.transaction(()=>{
+    const research=recordHandoff(store,'research',{...expected,evidence,pending:[],fit:input.fit,sources:input.sources},expected);
+    const sales=recordHandoff(store,'sales',{...expected,evidence:[research.hash],pending:[],need:input.need,buyer:input.buyer,scope:input.scope},expected);
+    store.audit(o.id,'SALES-01','presale_handoffs_recorded',{revision:o.revision,researchHash:research.hash,salesHash:sales.hash});
+    return {research,sales};
+  });
+}
+export function orderHandoffLedger(store:Store,orderId:string) {
+  const o=store.get(orderId);
+  const service=o.offer?.kind??'catalog';
+  const expected={orderId:o.id,revision:o.revision,service};
+  const roles=Object.keys(handoffSchemas) as AgentRole[];
+  const handoffs={} as Record<AgentRole,{recorded:boolean;verified:boolean;hash:string|null}>;
+  for(const role of roles){
+    const name=`${role}-${o.revision}.json`;
+    const fallback=role==='quality'?`handoff-${o.revision}.json`:null;
+    const row=(store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id,name)??(fallback?store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id,fallback):null)) as any;
+    if(!row){handoffs[role]={recorded:false,verified:false,hash:null};continue;}
+    try{
+      const parsed=JSON.parse(Buffer.from(row.data).toString());
+      const checked=validateHandoff(role,parsed,expected);
+      handoffs[role]={recorded:true,verified:true,hash:checked.hash};
+    }catch{
+      handoffs[role]={recorded:true,verified:false,hash:null};
+    }
+  }
+  const verifiedRoles=roles.filter(r=>handoffs[r].verified);
+  const missingRoles=roles.filter(r=>!handoffs[r].verified);
+  return {orderId:o.id,revision:o.revision,service,verifiedRoles,missingRoles,handoffs};
 }
 export type LearningProposal={clientId:string;revision:number;problem:string;evidence:string[];proposedRule:string;testEvidence?:string;approvedBy?:string};
 export function promoteLearning(p:LearningProposal,operator:string){
