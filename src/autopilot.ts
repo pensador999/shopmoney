@@ -397,7 +397,8 @@ export async function runAgentAutopilot(store: Store, input: AutopilotInput = {}
 
   const studioRecords: StudioRecord[] = [];
   const studioSummaryRows: Record<string, string>[] = [];
-  const entries = [...productGroups.entries()].slice(0, 20);
+  const maxContentProducts = processed.offer?.maxContentProducts ?? order.offer?.maxContentProducts ?? 10;
+  const entries = [...productGroups.entries()].slice(0, maxContentProducts);
 
   for (const [pid, prodRows] of entries) {
     const req = buildStudioRequestFromProductRows(store, scope, detectedBrand, filename, pid, prodRows, autoMapping, stockCol, categoryCol);
@@ -464,14 +465,17 @@ export async function runAgentAutopilot(store: Store, input: AutopilotInput = {}
   }
 
   const studioRecord = studioRecords[0]!;
+  const catalogProductCount = processed.report?.productCount ?? productGroups.size;
 
   steps.push({
     role: 'production',
     agentLabel: '6. Agente de Produção',
-    action: `Normalizou ${processed.report?.productCount ?? studioRecords.length} produto(s) / ${processed.report?.variantCount ?? rows.length} variante(s), gerou o CSV Shopify e construiu ${studioRecords.length} ficha(s) editorial(is) completa(s) no Content Studio.`,
+    action: `Normalizou ${catalogProductCount} produto(s) de catálogo / ${processed.report?.variantCount ?? rows.length} variante(s), gerou o CSV Shopify e construiu ${studioRecords.length} ficha(s) editorial(is) completa(s) no Content Studio (limite editorial: ${maxContentProducts}).`,
     autoFilledFields: {
-      productsNormalized: processed.report?.productCount ?? studioRecords.length,
+      productsNormalized: catalogProductCount,
       variantsNormalized: processed.report?.variantCount ?? rows.length,
+      editorialProductsGenerated: studioRecords.length,
+      maxContentProducts,
       studioRecordId: studioRecord.id,
       studioRecordIds: studioRecords.map(r => r.id),
       template: 'editorial',
@@ -539,7 +543,7 @@ export async function runAgentAutopilot(store: Store, input: AutopilotInput = {}
 
   // 7. Agente 8 (Coordenação, Reconciliação e Aprendizado Local)
   const exportedShopifyCsv = store.artifact(order.id, `shopify-${processed.revision}.csv`).toString('utf8');
-  const reconciliation = service.reconcileImport(order.id, exportedShopifyCsv, true);
+  const reconciliation = service.reconcileImport(order.id, exportedShopifyCsv, false);
 
   const learningProposal = proposeLearning(store, {
     orderId: order.id,

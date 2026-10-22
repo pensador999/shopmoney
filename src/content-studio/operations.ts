@@ -27,6 +27,7 @@ export class StudioOperations {
  }
  connect(id:string,scope:StudioScope,orderId?:string){
   const store=this.studio.store;
+  const isAllowedEditorial=(ord:any)=>Boolean(ord.demo||ord.offer?.commercialEnabled||store.setting('brlCommercialEnabled',false)||process.env.BRL_COMMERCIAL_ENABLED==='true');
   return store.transaction(()=>{
    const r=this.studio.get(id,scope);if(r.status==='cancelled')throw Error('Conteúdo cancelado.');
    const old=store.db.prepare('SELECT * FROM studio_order_links WHERE studio_id=?').get(id) as any;
@@ -34,7 +35,7 @@ export class StudioOperations {
     let oldActiveEditorial=false;
     try{
      const oldOrder=store.get(old.order_id,scope.clientId);
-     oldActiveEditorial=!!oldOrder.demo&&['content','combined'].includes(oldOrder.offer?.kind??'')&&!['cancelled','closed','refunded','refund_pending'].includes(oldOrder.status);
+     oldActiveEditorial=isAllowedEditorial(oldOrder)&&['content','combined'].includes(oldOrder.offer?.kind??'')&&!['cancelled','closed','refunded','refund_pending'].includes(oldOrder.status);
     }catch{oldActiveEditorial=false;}
     if(!oldActiveEditorial){
      store.db.prepare('DELETE FROM studio_order_links WHERE studio_id=?').run(id);
@@ -46,7 +47,7 @@ export class StudioOperations {
    if(!orderId){const offer=offerSnapshot('content');orderId=randomUUID();store.save({id:orderId,clientId:scope.clientId,status:'needs_info',demo:true,filename:'editorial-supervisionado',mapping:{},scopeApproved:false,amount:offer.cents,currency:offer.currency,offer,createdAt:new Date().toISOString(),revision:0,corrections:0,hours:0,fees:0,costs:0,error:'Pedido editorial local: aprovação e execução comerciais permanecem separadas.'});}
    const o=store.get(orderId,scope.clientId);
    if(o.remoteWorkspaceId&&o.remoteWorkspaceId!==scope.workspaceId)throw Error('Workspace incompatível.');
-   if(!o.demo||!['content','combined'].includes(o.offer?.kind??'')||['cancelled','closed','refunded','refund_pending'].includes(o.status))throw Error('Vínculo exige pedido local de validação editorial ativo.');
+   if(!isAllowedEditorial(o)||!['content','combined'].includes(o.offer?.kind??'')||['cancelled','closed','refunded','refund_pending'].includes(o.status))throw Error('Vínculo exige pedido local de validação editorial ativo.');
    const peers=store.db.prepare('SELECT s.workspace_id,s.store_id FROM studio_order_links l JOIN content_studios s ON s.id=l.studio_id WHERE l.order_id=?').all(orderId) as any[];
    if(peers.some(p=>p.workspace_id!==scope.workspaceId||p.store_id!==scope.storeId))throw Error('Pedido pertence a outro workspace/loja.');
    store.db.prepare('INSERT INTO studio_order_links VALUES(?,?,?) ON CONFLICT(studio_id) DO UPDATE SET order_id=excluded.order_id,order_revision=excluded.order_revision').run(id,orderId,o.revision);

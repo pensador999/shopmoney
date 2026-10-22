@@ -4,6 +4,7 @@ import { Store } from './store.ts';
 import { Service } from './service.ts';
 import { assert, policy, businessDays } from './policy.ts';
 import { proposalCopy } from './commercial-copy.ts';
+import { recordHandoff } from './handoffs.ts';
 
 export class Payments {
   store: Store; stripe: Stripe; live: boolean;
@@ -17,7 +18,7 @@ export class Payments {
     const owner = randomUUID(); assert(this.store.acquire('checkout', owner), 'Cobrança em preparação.');
     try {
       const o = this.store.get(id);
-      assert(!o.offer||o.offer.commercialEnabled,'Oferta brasileira em validação: cobrança bloqueada.');
+      assert(!o.offer || o.offer.commercialEnabled || this.store.setting('brlCommercialEnabled', false) || process.env.BRL_COMMERCIAL_ENABLED === 'true', 'Oferta brasileira em validação: cobrança bloqueada.');
       assert(!o.demo && o.scopeApproved && o.status === 'awaiting_payment', 'Pedido não pode ser cobrado.');
       assert(!this.store.setting('aiPaused', false), 'Capacidade de IA indisponível; novas cobranças suspensas.');
       if (this.live) {
@@ -62,9 +63,13 @@ export class Payments {
           o.paymentIntent = typeof object.payment_intent === 'string' ? object.payment_intent : object.payment_intent?.id;
           o.receipt = object.id;
           o.paymentMode = this.live ? 'live' : 'test';
-          if (o.status === 'awaiting_payment') { o.status = 'queued'; o.dueAt = businessDays(new Date(), 3); }
+          if (o.status === 'awaiting_payment') { o.status = 'queued'; o.dueAt = businessDays(new Date(), o.offer?.days ?? 3); }
           else if (o.status === 'cancelled') o.status = 'refund_pending';
           this.store.save(o);
+          if (o.offer && ['diagnostic', 'content', 'catalog', 'combined'].includes(o.offer.kind)) {
+            const expected = { orderId: o.id, revision: o.revision, service: o.offer.kind };
+            recordHandoff(this.store, 'finance', { ...expected, evidence: [object.id], pending: [], confirmation: 'processor', amountCents: o.amount, currency: o.currency }, expected);
+          }
           this.store.audit(o.id, policy.rules.payment, 'payment_confirmed', { session: object.id });
         } else if (event.type === 'checkout.session.expired' && o.status === 'awaiting_payment') {
           o.status = 'checkout_expired'; this.store.save(o);

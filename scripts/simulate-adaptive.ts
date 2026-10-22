@@ -19,6 +19,10 @@ try{
     writeFileSync(resolve(directory,'synthetic-'+role+'.json'),JSON.stringify(job,null,2));console.log(JSON.stringify({role,status:job?.status,error:job?.error}));
     if(job?.status!=='done'||job.result?.deliverable?.kind==='pending')break;
     if(role==='production')record=studio.applyDraft(record.id,record.request.scope,record.revision,task.id);
+    if(role==='quality'&&job.result?.deliverable?.verdict==='pass'&&record.request.blocks.some(b=>!b.approved)){
+      record.request.blocks=record.request.blocks.map(b=>({...b,approved:true}));
+      record=studio.revise(record.id,record.request.scope,record.revision,record.request);
+    }
   }
   writeFileSync(resolve(directory,'synthetic-preview.html'),renderPreview(record.request,'editorial'));
   writeFileSync(resolve(directory,'synthetic-result.json'),JSON.stringify({id:record.id,revision:record.revision,status:record.status,approved:false,realModel:true,budget:store.setting('aiDailyBudget',null)},null,2));

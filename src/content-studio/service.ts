@@ -161,7 +161,7 @@ export class ContentStudio {
         product:{id:r.request.product.id,title:r.request.product.title,variants:r.request.product.variants.length,facts:r.request.product.facts.length,
           media:r.request.media.length},approvedFacts:role==='production'?r.request.product.facts.filter(f=>f.approved).slice(0,10).map(f=>({id:f.id,text:f.text.slice(0,600),source:f.source.slice(0,200)})):[],
         factCoverage:'Contexto limitado; não inferir fatos omitidos.',
-        pending:checkRequest(r.request),approvedTemplate:r.approval?.template??null,
+        pending:checkRequest(r.request).filter(i=>role!=='quality'||i.code!=='COPY_PENDING'),approvedTemplate:r.approval?.template??null,
         limits:'Contexto resumido. Não recebeu imagens nem fichas completas; não declare análise visual, publicação ou aceite do cliente. Resposta é consultiva.'}};
   }
   structuredAdvice(id:string,scope:StudioScope,role:'planner'|'production'|'quality'){
@@ -171,7 +171,7 @@ export class ContentStudio {
       blocks:r.request.blocks,category:r.request.adaptive?.category??'não classificada',
       components:r.request.adaptive?.components??[],
       examples:role==='production'?new Examples(this.store).retrieve(scope,r.request.adaptive?.category??'',r.request.product.title,r.request.product.id):[],
-      pending:pending(r.request)};
+      pending:pending(r.request,role)};
     return {...task,id:task.id+'-structured',input};
   }
   applyDraft(id:string,scope:StudioScope,revision:number,jobId:string){
@@ -192,9 +192,10 @@ export class ContentStudio {
   }
   private requireQuality(record:StudioRecord){
     if(!record.aiDraftJob)return;
+    const unapprovedDraftHash=digest({...record.request,blocks:record.request.blocks.map(b=>({...b,approved:false}))});
     const jobs=(this.store.db.prepare("SELECT input,result FROM ai_jobs WHERE client_id=? AND role='quality' AND status='done' ORDER BY rowid DESC").all(record.request.scope.clientId)as any[]).filter(row=>{
       const input=JSON.parse(row.input);
-      return input.structured===true&&input.studioId===record.id&&JSON.stringify(input.scope)===JSON.stringify(record.request.scope)&&input.requestHash===record.requestHash&&input.playbookVersion===agentPlaybook('quality','content').version;
+      return input.structured===true&&input.studioId===record.id&&JSON.stringify(input.scope)===JSON.stringify(record.request.scope)&&(input.requestHash===record.requestHash||input.requestHash===unapprovedDraftHash)&&input.playbookVersion===agentPlaybook('quality','content').version;
     }).map(row=>({result:JSON.parse(row.result)}));
     const latest=jobs[0];if(!latest)throw Error('Rascunho IA exige conferência independente desta revisão.');
     const d=validateDeliverable(record.request,'quality',latest.result.deliverable);
@@ -212,8 +213,9 @@ export class ContentStudio {
   }
   jobs(id:string,scope:StudioScope){
     const current=this.get(id,scope);
+    const unapprovedDraftHash=current.aiDraftJob?digest({...current.request,blocks:current.request.blocks.map(b=>({...b,approved:false}))}):null;
     return (this.store.db.prepare('SELECT id,role,status,input,result,error FROM ai_jobs WHERE client_id=? ORDER BY rowid DESC LIMIT 100').all(scope.clientId)as any[]).filter(row=>{
-      const input=JSON.parse(row.input);return input.studioId===id&&JSON.stringify(input.scope)===JSON.stringify(scope)&&input.revision===current.revision;
+      const input=JSON.parse(row.input);return input.studioId===id&&JSON.stringify(input.scope)===JSON.stringify(scope)&&(input.revision===current.revision||(unapprovedDraftHash!==null&&row.role==='quality'&&input.requestHash===unapprovedDraftHash));
     }).map(({input,...row})=>({...row,result:row.result?JSON.parse(row.result):null}));
   }
 }

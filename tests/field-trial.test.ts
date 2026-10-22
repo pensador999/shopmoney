@@ -67,7 +67,7 @@ test('piloto automático (autopilot) executa os 8 agentes fim a fim com zero pre
     assert.equal(reOrch.record.status, 'exported');
     assert.equal(reOrch.overview.order?.handoffs.verifiedRoles.length, 8);
 
-    // Verifica limite expandido de até 20 produtos no Autopilot (acima de 10 produtos)
+    // Verifica limite contratual: até 20 produtos no catálogo conciliado e teto de 10 fichas editoriais no Content Studio (br-2026-10-19.1)
     const rows12 = [
       'Ref_Peca;Nome_Produto;Cod_Item;Vlr_Venda;Grade_Cor;Grade_Tam;Categoria_Item',
       ...Array.from({ length: 12 }, (_, idx) => `P-${idx + 1};Camisa Linho ${idx + 1};SKU-${idx + 1};199,90;Areia;M;Camisa`)
@@ -77,7 +77,9 @@ test('piloto automático (autopilot) executa os 8 agentes fim a fim com zero pre
       dataBase64: Buffer.from(rows12, 'utf8').toString('base64'),
       storeName: 'Atelier Doze Pecas'
     });
-    assert.equal(res12.studioRecordIds.length, 12);
+    assert.equal(res12.reconciliation.matchedSkus, 12);
+    assert.equal(res12.studioRecordIds.length, 10);
+    assert.equal(store.setting<Record<string, string>>('gates', {}).shopifyImport, undefined);
   } finally {
     store.close();
   }

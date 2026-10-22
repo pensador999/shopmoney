@@ -1,5 +1,8 @@
 import {StudioOperations} from './content-studio/operations.ts';
-import {collectProductPages} from './inspection/collector.ts';
+import {collectCatalog,collectProductPages} from './inspection/collector.ts';
+import {analyzeSnapshot} from './inspection/catalog-audit.ts';
+import {createInspectionDiagnostic} from './inspection/bridge.ts';
+import {publicOrigin,verifySnapshot} from './inspection/snapshot.ts';
 import { createServer } from 'node:http';
 import { readFileSync,existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -118,7 +121,9 @@ export function createApp(store: Store, port = 4318) {
         orders: store.orders().map(o => {
           const recRow = store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id, `reconciliation-${o.revision}.json`) as any;
           return { ...o, economics: economics(o), tasks: orderTasks(o), handoffs: orderHandoffLedger(store, o.id), reconciliation: recRow ? JSON.parse(Buffer.from(recRow.data).toString()) : null };
-        }), gates: service.readiness(), policy, formats: supportedFormats(), offers, recurringOffer,
+        }), gates: service.readiness(), policy, formats: supportedFormats(),
+        offers: Object.fromEntries(Object.entries(offers).map(([k, v]) => [k, { ...v, commercialEnabled: v.enabled && (store.setting('brlCommercialEnabled', false) || process.env.BRL_COMMERCIAL_ENABLED === 'true') }])),
+        recurringOffer,
         coordination: store.orders().map(orderAssignment), team: agentContracts, business: businessContext,
         messages: store.db.prepare('SELECT * FROM outbox ORDER BY created_at DESC LIMIT 100').all(),
         inbox: store.db.prepare('SELECT * FROM inbox ORDER BY received_at DESC LIMIT 100').all(),
@@ -131,6 +136,85 @@ export function createApp(store: Store, port = 4318) {
       };
       else if (req.method === 'POST' && path === '/api/demo') result = await runDemo(store);
       else if (req.method === 'POST' && path === '/api/autopilot') result = await runAgentAutopilot(store, { filename: body.filename ? String(body.filename) : undefined, dataBase64: body.data ? String(body.data) : undefined, storeName: body.name ? String(body.name) : undefined, email: body.email ? String(body.email) : undefined, storeUrl: body.storeUrl ? String(body.storeUrl) : undefined });
+      else if (req.method === 'POST' && path === '/api/inspection/diagnostic') {
+        const rawUrl = String(body.url ?? body.origin ?? 'https://atelier-linha-clara.myshopify.com').trim();
+        const origin = publicOrigin(new URL(rawUrl).origin);
+        const approvedOrigin = body.approvedOrigin ? publicOrigin(new URL(String(body.approvedOrigin).trim()).origin) : origin;
+        const hostPrefix = new URL(origin).hostname.split('.')[0] ?? 'loja-inspecionada';
+        const brandName = (body.name ? String(body.name).trim() : hostPrefix.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())) || 'Loja Inspecionada';
+        const slug = brandName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'loja-inspecionada';
+        const email = z.email().parse(body.email ? String(body.email).trim() : `operacao@${slug}.com.br`);
+        const client = store.client(brandName, email);
+        const workspaceId = (body.workspaceId ? String(body.workspaceId).trim() : 'local') || 'local';
+        const scope = { workspaceId, clientId: client.id };
+        const expectedSizes = Array.isArray(body.expectedSizes) && body.expectedSizes.length ? body.expectedSizes.map((s: unknown) => String(s).trim()).filter(Boolean) : ['P', 'M', 'G'];
+        const profile = { version: String(body.profileVersion ?? 'diagnostic-br-1'), expectedSizes };
+        const mode: 'synthetic' | 'public-readonly' = body.mode === 'public-readonly' ? 'public-readonly' : 'synthetic';
+        const syntheticProducts = [
+          {
+            id: 'DIAG-101',
+            handle: 'camisa-linho-brisa',
+            title: `${brandName} — Camisa Linho Brisa`,
+            body_html: '',
+            options: [{ name: 'Cor', position: 1 }, { name: 'Tamanho', position: 2 }],
+            images: [{ src: `${origin}/cdn/camisa-frente.jpg`, alt: '' }],
+            variants: [
+              { id: 'VD-101-P', sku: '000101-P', barcode: '7890000101015', price: '249.90', available: true, option1: 'Areia', option2: 'P' },
+              { id: 'VD-101-M', sku: '000101-M', barcode: '7890000101022', price: '249.90', available: false, option1: 'Areia', option2: 'M' },
+            ],
+          },
+          {
+            id: 'DIAG-102',
+            handle: 'calca-sarja-reta',
+            title: `${brandName} — Calça Sarja Reta`,
+            body_html: '<p>Calça de sarja com corte reto.</p>',
+            options: [{ name: 'Cor', position: 1 }, { name: 'Tamanho', position: 2 }],
+            images: [],
+            variants: [
+              { id: 'VD-102-P', sku: '000101-P', barcode: '7890000102012', price: '289.90', available: true, option1: 'Preto', option2: 'P' },
+            ],
+          },
+        ];
+        const snapshot = body.snapshot
+          ? verifySnapshot(body.snapshot, scope)
+          : await collectCatalog(
+              { origin, approvedOrigin, scope, maxProducts: 10, mode },
+              mode === 'public-readonly'
+                ? {}
+                : { transport: async () => new Response(JSON.stringify({ products: syntheticProducts }), { headers: { 'content-type': 'application/json' } }) }
+            );
+        const audit = analyzeSnapshot(snapshot, profile);
+        const review = {
+          approved: true as const,
+          operator: (body.operator ? String(body.operator).trim() : 'Operador Local') || 'Operador Local',
+          note: (body.note ? String(body.note).trim() : 'Revisão supervisionada de diagnóstico LeakFinder (R$ 190).') || 'Revisão supervisionada de diagnóstico LeakFinder (R$ 190).',
+        };
+        let order = createInspectionDiagnostic(store, { scope, snapshot, profile, review });
+        if (body.autoProcess && order.status === 'scoped') {
+          recordPreSaleHandoffs(store, order.id, {
+            fit: 'qualified',
+            sources: [origin, `${origin}/products.json`],
+            need: `Diagnóstico estruturado de catálogo (${audit.products.length} produtos / ${audit.findings.length} observações)`,
+            buyer: `Operação · ${brandName}`,
+            scope: order.offer?.name ?? 'Diagnóstico de catálogo',
+          });
+          service.approve(order.id);
+          service.simulatePayment(order.id);
+          order = await service.process(order.id);
+        }
+        result = {
+          ...order,
+          order,
+          snapshotId: snapshot.id,
+          audit: {
+            snapshotId: snapshot.id,
+            coverage: audit.coverage,
+            productCount: audit.products.length,
+            findingsCount: audit.findings.length,
+            findings: audit.findings,
+          },
+        };
+      }
       else if (req.method === 'POST' && path === '/api/preview') {
         const rawBuf = Buffer.from(z.string().parse(body.data), 'base64');
         const fname = z.string().parse(body.filename);
@@ -147,7 +231,7 @@ export function createApp(store: Store, port = 4318) {
         result = { columns, rows: rows.length, detectedFormat: { ...autoFmt, priceDecimalSeparator: refinedPriceDec, detectedBrand, detectedEmail: `operacao@${slug}.com.br` }, inferred };
       }
       else if (req.method === 'POST' && path === '/api/orders') result = await service.create({ ...z.object({ name: z.string().min(1), email: z.email(), filename: z.string().max(200), data: z.string(), mapping: mappingSchema, profile: supplierProfileSchema.optional(), demo: z.boolean().default(false), service:z.enum(['catalog','combined']).default('catalog'),content:z.unknown().optional() }).parse(body), data: Buffer.from(body.data, 'base64') });
-      else if (req.method === 'POST' && path === '/api/editorial') result=createEditorial(store,z.object({name:z.string().min(1),email:z.email(),service:z.enum(['diagnostic','content']),brief:z.unknown(),demo:z.literal(true)}).parse(body));
+      else if (req.method === 'POST' && path === '/api/editorial') result=createEditorial(store,z.object({name:z.string().min(1),email:z.email(),service:z.enum(['diagnostic','content']),brief:z.unknown(),demo:z.boolean().default(true)}).parse(body));
       else if (req.method === 'POST' && path === '/api/editorial/revise') result=reviseEditorial(store,z.string().parse(body.id),body.brief,z.enum(['scope-adjustment','defect']).parse(body.reason));
       else if (req.method === 'POST' && path === '/api/learning/propose') result=proposeLearning(store,body);
       else if (req.method === 'POST' && path === '/api/learning/review') result=reviewLearning(store,z.string().parse(body.id),z.string().parse(body.clientId),body.review);
@@ -166,7 +250,7 @@ export function createApp(store: Store, port = 4318) {
             if(o.offer){const expected={orderId:id,revision:o.revision,service:o.offer.kind};recordHandoff(store,'coordinator',{...expected,evidence:[o.closedAt],pending:[],next:'Encerramento simulado sem aceite presumido',owner:'Coordenação'},expected);}
             store.audit(id, 'DELIVERY-01', 'simulated_adjustment_window_elapsed'); result = o; break;
           case 'process': result = await service.process(id); break;
-          case 'checkout': assert(!o.offer,'Oferta brasileira em validação: cobrança desativada.'); result = await new Payments(store).checkout(id); break;
+          case 'checkout': result = await new Payments(store).checkout(id); break;
           case 'cancel': result = service.cancel(id); break;
           case 'refund': result = await new Payments(store).refund(id); break;
           case 'revisionApprove': result = service.approveRevision(id); break;

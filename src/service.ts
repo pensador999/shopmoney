@@ -163,6 +163,7 @@ export class Service {
       this.store.audit(id, policy.rules.quality, reconciliation.ok ? 'shopify_import_reconciled' : 'shopify_import_diverged', { revision: o.revision, ...reconciliation });
       if (promoteGate) {
         assert(reconciliation.ok, 'Gate shopifyImport bloqueado: exportação da loja apresenta divergências.');
+        assert(!o.demo, 'Pedidos demonstrativos não promovem o gate comercial shopifyImport.');
         const gates = this.store.setting<Record<string, string>>('gates', {});
         gates.shopifyImport = `Conciliação determinística aprovada no pedido ${id} r${o.revision} (${reconciliation.matchedSkus} variantes; hash ${reconciliation.evidenceHash})`;
         this.store.set('gates', gates);

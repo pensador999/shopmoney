@@ -14,8 +14,9 @@ import {intakeSnapshot} from '../src/content-studio/intake.ts';
 import {collectProductPages} from '../src/inspection/collector.ts';
 import {recordPreSaleHandoffs,orderHandoffLedger} from '../src/handoffs.ts';
 import {economics} from '../src/order-workflow.ts';
-import {addLead} from '../src/mail.ts';
+import {addLead,isOptOutText} from '../src/mail.ts';
 import {orderAgentRequest} from '../src/coordination.ts';
+import {Payments} from '../src/payments.ts';
 const approval={template:'essential',color:'Areia',operator:'Teste sintético',note:'Revisão sintética sem aceite de cliente.',visualChecked:true,textChecked:true,factsChecked:true};
 function setup(){const store=new Store(':memory:'),client=store.client('Fixture','fixture@test.invalid'),studio=new ContentStudio(store),request=studioFixture({workspaceId:'local',clientId:client.id,storeId:'loja'});return{store,studio,request};}
 test('pedido vinculado é idempotente, isolado e cancelamento impede aprovação editorial',()=>{
@@ -104,6 +105,11 @@ test('verticalização de vestuário: vistas frente/costas, matriz de incompatib
   const bling=parse(files['bling-validacao.csv']!,{columns:true,bom:true,delimiter:';'}) as Record<string,string>[];
   assert.equal(bling[0]['Unidade'],'UN');
   assert.equal(bling[0]['Categoria do produto'],'camiseta');
+  assert(bling[0]['Descrição Complementar']!.includes(request.product.facts[0]!.text));
+  assert(bling[0]['Descrição Curta']!.length>10);
+  assert(bling[0]['Descrição Curta']!.length<=250);
+  assert.equal(bling[1]['Descrição Complementar'],bling[0]['Descrição Complementar']);
+  assert.equal(bling[1]['Descrição Curta'],bling[0]['Descrição Curta']);
  }finally{store.close();}
 });
 test('guardião de unit economics por etapa e fechamento dos oito contratos de handoff operacionais',async()=>{
@@ -182,6 +188,11 @@ test('ponte de lote LeakFinder e conciliador pós-importação Shopify validam m
   assert(failedRec.issues.some(i=>i.code==='PRICE_MISMATCH'));
   assert.throws(()=>service.reconcileImport(catReady.id,badExport,true),/Gate shopifyImport bloqueado/);
   assert.equal(store.setting<Record<string,string>>('gates',{}).shopifyImport,undefined);
+  assert.throws(()=>service.reconcileImport(catReady.id,generatedShopifyCsv,true),/Pedidos demonstrativos não promovem o gate comercial shopifyImport/);
+  assert.equal(store.setting<Record<string,string>>('gates',{}).shopifyImport,undefined);
+  const liveOrder=store.get(catReady.id);
+  liveOrder.demo=false;
+  store.save(liveOrder);
   const okRec=service.reconcileImport(catReady.id,generatedShopifyCsv,true);
   assert.equal(okRec.ok,true);
   assert(store.setting<Record<string,string>>('gates',{}).shopifyImport?.includes(okRec.evidenceHash));
@@ -197,3 +208,77 @@ test('ponte de lote LeakFinder e conciliador pós-importação Shopify validam m
   assert(harmLedger.verifiedRoles.includes('sales'));
  }finally{store.close();}
 });
+test('desbloqueio de structuredAdvice(quality) após applyDraft, opt-out PT-BR e preparação BRL (checkout + finance handoff + dueAt)',async()=>{
+ const {store,studio,request}=setup();try{
+  assert.equal(isOptOutText('Olá, não tenho interesse no momento.'),true);
+  assert.equal(isOptOutText('Por favor, me descadastrar e parar de receber emails.'),true);
+  assert.equal(isOptOutText('Quero sair da lista / remover da lista.'),true);
+  assert.equal(isOptOutText('Sem interesse, obrigado.'),true);
+  assert.equal(isOptOutText('Nao quero receber novas mensagens.'),true);
+  assert.equal(isOptOutText('Tenho interesse em conhecer o diagnóstico R$ 190.'),false);
+
+  request.adaptive={category:'apparel',coverage:{kind:'manual',source:'Ficha técnica',observedAt:new Date().toISOString(),missing:[]},requirements:[],conflicts:[],components:[],guides:[{id:'g-1',title:'Tabela de medidas',componentId:'',source:'Modelagem',unit:'cm',approved:true,columns:['Busto'],rows:[{size:'P',values:[88]}]}]};
+  let rec=studio.create(request);
+  const prodTask=studio.structuredAdvice(rec.id,request.scope,'production');
+  store.db.prepare('INSERT INTO ai_jobs(id,client_id,role,input,status,result,attempts) VALUES(?,?,?,?,?,?,1)').run(
+   prodTask.id,
+   prodTask.clientId,
+   'production',
+   JSON.stringify(prodTask.input),
+   'done',
+   JSON.stringify({deliverable:{kind:'draft',blocks:[{id:'b-draft',section:'presentation',text:rec.request.product.facts[0]!.text,factIds:[rec.request.product.facts[0]!.id]}]}})
+  );
+  rec=studio.applyDraft(rec.id,request.scope,rec.revision,prodTask.id);
+  assert.equal(rec.request.blocks[0]!.approved,false);
+  assert(pending(rec.request,'production').some(i=>i.id.startsWith('COPY_PENDING:')));
+  assert(!pending(rec.request,'quality').some(i=>i.id.startsWith('COPY_PENDING:')));
+  const qualityTask=studio.structuredAdvice(rec.id,request.scope,'quality');
+  assert.equal((qualityTask.input.pending as any[]).some(i=>String(i.id).startsWith('COPY_PENDING:')),false);
+  store.db.prepare('INSERT INTO ai_jobs(id,client_id,role,input,status,result,attempts) VALUES(?,?,?,?,?,?,1)').run(
+   qualityTask.id,
+   qualityTask.clientId,
+   'quality',
+   JSON.stringify(qualityTask.input),
+   'done',
+   JSON.stringify({deliverable:{kind:'quality',verdict:'pass',findings:[],limits:['Conferência textual com fatos aprovados.']}})
+  );
+  const approvedBlocksReq=structuredClone(rec.request);
+  approvedBlocksReq.blocks=approvedBlocksReq.blocks.map(b=>({...b,approved:true}));
+  rec=studio.revise(rec.id,request.scope,rec.revision,approvedBlocksReq);
+  assert(studio.jobs(rec.id,request.scope).some(j=>j.id===qualityTask.id&&j.role==='quality'));
+
+  const mutatedTextReq=structuredClone(rec.request);
+  mutatedTextReq.blocks=mutatedTextReq.blocks.map(b=>({...b,text:b.text+' Texto alterado após QA.'}));
+  const mutatedRec=studio.revise(rec.id,request.scope,rec.revision,mutatedTextReq);
+  assert.equal(studio.jobs(mutatedRec.id,request.scope).some(j=>j.id===qualityTask.id),false);
+  assert.throws(()=>studio.approve(mutatedRec.id,request.scope,mutatedRec.revision,approval),/Rascunho IA exige conferência independente desta revisão/);
+
+  rec=studio.revise(mutatedRec.id,request.scope,mutatedRec.revision,approvedBlocksReq);
+  const approvedRec=studio.approve(rec.id,request.scope,rec.revision,approval);
+  assert.equal(approvedRec.status,'approved');
+
+  const service=new Service(store),payments=new Payments(store);
+  const brlClient=store.client('Loja BRL','brl@test.invalid');
+  const diagSnapshot=await collectProductPages({origin:'https://brl.example.com',approvedOrigin:'https://brl.example.com',scope:{workspaceId:'local',clientId:brlClient.id},handles:['blusa-1'],mode:'synthetic'},{transport:async()=>new Response(JSON.stringify({product:{id:'10',handle:'blusa-1',title:'Blusa BRL',body_html:'<p>Blusa 100% algodão</p>',options:[{name:'Cor',position:1},{name:'Tamanho',position:2}],variants:[{id:'v-10',sku:'SKU-10',price:'159.90',available:true,option1:'Preto',option2:'M'}],images:[]}}),{headers:{'content-type':'application/json'}})});
+  const {createInspectionDiagnostic}=await import('../src/inspection/bridge.ts');
+  const diagOrder=createInspectionDiagnostic(store,{scope:{workspaceId:'local',clientId:brlClient.id},snapshot:diagSnapshot,profile:{version:'diag-br-1',expectedSizes:['P','M','G']},review:{approved:true,operator:'Op BRL',note:'Revisão diagnóstica'}});
+  assert.equal(diagOrder.offer?.kind,'diagnostic');
+  assert.equal(diagOrder.amount,19000);
+  diagOrder.demo=false;
+  diagOrder.checkoutId='cs_brl_1';
+  store.save(diagOrder);
+  service.approve(diagOrder.id);
+  await assert.rejects(()=>payments.checkout(diagOrder.id),/Oferta brasileira em validação: cobrança bloqueada/);
+  store.set('brlCommercialEnabled',true);
+  await assert.rejects(()=>payments.checkout(diagOrder.id),/Configure PUBLIC_URL/);
+  payments.apply({id:'evt_brl_1',type:'checkout.session.completed',livemode:false,data:{object:{id:'cs_brl_1',mode:'payment',payment_status:'paid',payment_intent:'pi_brl_1',amount_total:19000,currency:'brl',client_reference_id:diagOrder.id,metadata:{orderId:diagOrder.id,revision:'0'}}}} as any);
+  const paidDiag=store.get(diagOrder.id);
+  assert.equal(paidDiag.status,'queued');
+  assert(paidDiag.dueAt);
+  const {businessDays}=await import('../src/policy.ts');
+  assert.equal(paidDiag.dueAt.slice(0,10),businessDays(new Date(),2).slice(0,10));
+  const diagLedger=orderHandoffLedger(store,diagOrder.id);
+  assert(diagLedger.verifiedRoles.includes('finance'));
+ }finally{store.close();}
+});
+

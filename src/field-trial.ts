@@ -76,7 +76,7 @@ export async function runFieldTrials(persistArtifacts = true) {
     const claraReady = await service.process(claraOrder.id);
     const claraZip = new AdmZip(store.artifact(claraReady.id, 'delivery-0.zip'));
     const generatedShopifyCsv = claraZip.readAsText('shopify.csv');
-    const reconciled = service.reconcileImport(claraReady.id, generatedShopifyCsv, true);
+    const reconciled = service.reconcileImport(claraReady.id, generatedShopifyCsv, false);
     assert.equal(reconciled.ok, true);
     assert.equal(reconciled.matchedSkus, 2);
     service.delivered(claraReady.id, claraReady.deliveryId!);
