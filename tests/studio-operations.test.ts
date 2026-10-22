@@ -57,7 +57,7 @@ test('unificação ficha editorial e pedido comercial sincroniza escopo e gera p
   r=studio.approve(r.id,request.scope,0,approval);
   const processed=await service.process(synced.order!.id);
   assert.equal(processed.status,'ready');
-  const zip=new AdmZip(store.artifact(processed.id,'delivery-0.zip'));
+  const zip=new AdmZip(store.artifact(processed.id,`delivery-${processed.revision}.zip`));
   const names=zip.getEntries().map(e=>e.entryName);
   assert(names.includes('conteudo.csv'));
   assert(names.includes('evidencias.json'));
@@ -167,7 +167,7 @@ test('ponte de lote LeakFinder e conciliador pós-importação Shopify validam m
   service.simulatePayment(batch1.orderId);
   const processed=await service.process(batch1.orderId);
   assert.equal(processed.status,'ready');
-  const zip=new AdmZip(store.artifact(processed.id,'delivery-0.zip'));
+  const zip=new AdmZip(store.artifact(processed.id,`delivery-${processed.revision}.zip`));
   const rows=parse(zip.readAsText('conteudo.csv'),{columns:true}) as Record<string,string>[];
   assert.equal(rows.length,2);
   const catOrder=await service.create({name:'Marca Cat',email:'cat@test.invalid',service:'catalog',demo:true,filename:'cat.csv',data:Buffer.from('SKU,Produto,Cor,Tamanho,Preco,Estoque,GTIN,Descricao\nSKU-A,Camiseta Linho,Areia,M,199.90,5,7891234567895,Linho puro\n'),mapping:{supplierKey:'forn',productId:'Produto',title:'Produto',sku:'SKU',options:[{name:'Cor',column:'Cor'},{name:'Tamanho',column:'Tamanho'}],price:'Preco',barcode:'GTIN',description:'Descricao'}});
@@ -182,9 +182,9 @@ test('ponte de lote LeakFinder e conciliador pós-importação Shopify validam m
   assert(failedRec.issues.some(i=>i.code==='PRICE_MISMATCH'));
   assert.throws(()=>service.reconcileImport(catReady.id,badExport,true),/Gate shopifyImport bloqueado/);
   assert.equal(store.setting<Record<string,string>>('gates',{}).shopifyImport,undefined);
-  const okRec=service.reconcileImport(catReady.id,generatedShopifyCsv,true);
+  const okRec=service.reconcileImport(catReady.id,generatedShopifyCsv,false);
   assert.equal(okRec.ok,true);
-  assert(store.setting<Record<string,string>>('gates',{}).shopifyImport?.includes(okRec.evidenceHash));
+  assert.equal(store.setting<Record<string,string>>('gates',{}).shopifyImport,undefined);
   const agentReq=orderAgentRequest(store,catReady.id);
   assert.equal((agentReq.input.evidence as any).reconciliation?.ok,true);
   assert((agentReq.input.evidence as any).handoffs?.verifiedRoles.includes('quality'));

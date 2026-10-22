@@ -161,13 +161,7 @@ export class Service {
       const reconciliation = reconcileShopifyExport(generatedCsv, exportedCsv);
       this.store.db.prepare('INSERT INTO artifacts VALUES(?,?,?) ON CONFLICT(order_id,name) DO UPDATE SET data=excluded.data').run(id, `reconciliation-${o.revision}.json`, Buffer.from(JSON.stringify(reconciliation, null, 2)));
       this.store.audit(id, policy.rules.quality, reconciliation.ok ? 'shopify_import_reconciled' : 'shopify_import_diverged', { revision: o.revision, ...reconciliation });
-      if (promoteGate) {
-        assert(reconciliation.ok, 'Gate shopifyImport bloqueado: exportação da loja apresenta divergências.');
-        const gates = this.store.setting<Record<string, string>>('gates', {});
-        gates.shopifyImport = `Conciliação determinística aprovada no pedido ${id} r${o.revision} (${reconciliation.matchedSkus} variantes; hash ${reconciliation.evidenceHash})`;
-        this.store.set('gates', gates);
-        this.store.audit(id, policy.rules.scope, 'gate_evidence', { name: 'shopifyImport', evidence: gates.shopifyImport });
-      }
+      assert(!promoteGate, 'Gate shopifyImport bloqueado: comparação de CSV não comprova importação. Registre evidência externa separadamente.');
       return reconciliation;
     });
   }

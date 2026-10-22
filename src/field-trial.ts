@@ -76,7 +76,7 @@ export async function runFieldTrials(persistArtifacts = true) {
     const claraReady = await service.process(claraOrder.id);
     const claraZip = new AdmZip(store.artifact(claraReady.id, 'delivery-0.zip'));
     const generatedShopifyCsv = claraZip.readAsText('shopify.csv');
-    const reconciled = service.reconcileImport(claraReady.id, generatedShopifyCsv, true);
+    const reconciled = service.reconcileImport(claraReady.id, generatedShopifyCsv, false);
     assert.equal(reconciled.ok, true);
     assert.equal(reconciled.matchedSkus, 2);
     service.delivered(claraReady.id, claraReady.deliveryId!);
@@ -268,7 +268,7 @@ export async function runFieldTrials(persistArtifacts = true) {
     checks.push(`Ponte LeakFinder converteu captura pública em ficha editorial vinculada ao pedido ${batchResult.orderId.slice(0, 8)} com SKU preservado (${auditT0.products[0]!.variants[0]!.sku}).`);
 
     const fieldSummary = {
-      reference: 'Ensaio de Campo Multi-Lojas (Linha Clara · Bambino Kids · Aprendizado Local)',
+      reference: 'Ensaio Sintético Multi-Lojas (Linha Clara · Bambino Kids · Aprendizado Local)',
       mode: 'Validação de campo local com motor heurístico/estatístico SQLite (sem nuvem paga)',
       at: new Date().toISOString(),
       checks,

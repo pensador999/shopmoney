@@ -32,7 +32,23 @@ export class ContentStudio {
     if(!row)throw Error('Conteúdo não encontrado neste cliente/loja/workspace.');
     const record=JSON.parse(row.data)as StudioRecord;
     const request=studioRequestSchema.parse(record.request);
-    if(digest(request)!==record.requestHash)throw Error('Conteúdo persistido foi alterado.');
+    if(digest(record.request)!==record.requestHash)throw Error('Conteúdo persistido foi alterado.');
+    if(digest(request)!==record.requestHash){
+      // Only the known additive legacy media defaults may be migrated.
+      const legacy=structuredClone(request) as any;
+      for(let i=0;i<legacy.media.length;i++){
+        const original=record.request.media[i] as any;
+        if(!Object.hasOwn(original,'view'))delete legacy.media[i].view;
+        if(!Object.hasOwn(original,'viewConfirmed'))delete legacy.media[i].viewConfirmed;
+      }
+      if(digest(legacy)!==record.requestHash)throw Error('Formato legado não reconhecido.');
+      record.request=request;record.requestHash=digest(request);record.revision++;
+      record.status='draft';delete record.approval;
+      record.updatedAt=new Date().toISOString();this.write(record);
+      this.store.db.prepare('INSERT INTO content_studio_revisions VALUES(?,?,?)').run(id,record.revision,JSON.stringify(request));
+      this.invalidateLinked(record);
+      this.store.audit(null,'QA-01','legacy_media_migrated',{id,revision:record.revision,approvalInvalidated:true});
+    }
     return record;
   }
   list(){
@@ -40,6 +56,18 @@ export class ContentStudio {
       const v=JSON.parse(r.data)as StudioRecord;
       return {id:v.id,scope:v.request.scope,revision:v.revision,status:v.status,product:v.request.product.title,brand:v.request.brand.name,category:v.request.adaptive?.category??'Sem categoria',updatedAt:v.updatedAt};
     });
+  }
+  private invalidateLinked(record:StudioRecord){
+    if(!this.store.db.prepare("SELECT name FROM sqlite_master WHERE name='studio_order_links'").get())return;
+    const link=this.store.db.prepare('SELECT order_id FROM studio_order_links WHERE studio_id=?').get(record.id) as any;
+    if(!link)return;
+    const order=this.store.get(link.order_id,record.request.scope.clientId);
+    if(['closed','cancelled','refunded','refund_pending'].includes(order.status))return;
+    order.revision++;order.scopeApproved=false;order.status='needs_info';delete order.deliveryId;delete order.qa;
+    order.error='Conteúdo alterado: reconfira escopo e qualidade antes de gerar novo pacote.';
+    this.store.save(order);
+    this.store.db.prepare('UPDATE studio_order_links SET order_revision=? WHERE order_id=?').run(order.revision,order.id);
+    this.store.audit(order.id,'QA-01','editorial_dependencies_invalidated',{studioId:record.id,revision:order.revision});
   }
   private profile(request:StudioRequest){
     const s=request.scope,data=JSON.stringify(request.brand);
@@ -75,6 +103,7 @@ export class ContentStudio {
       this.profile(request);record.revision++;record.request=request;record.requestHash=digest(request);record.status='draft';delete record.approval;
       record.updatedAt=new Date().toISOString();this.write(record);
       this.store.db.prepare('INSERT INTO content_studio_revisions VALUES(?,?,?)').run(id,record.revision,JSON.stringify(request));
+      this.invalidateLinked(record);
       this.store.audit(null,'QA-01','content_studio_revised',{id,revision:record.revision,approvalInvalidated:true});
       return record;
     });

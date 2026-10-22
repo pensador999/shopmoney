@@ -18,21 +18,12 @@ test('ensaio de campo multi-lojas valida adaptação, fronteira de demanda, ML l
   assert.equal(summary.observations.length, 3);
 });
 
-test('piloto automático (autopilot) executa os 8 agentes fim a fim com zero preenchimento manual', async () => {
-  const store = new Store(':memory:');
-  try {
-    const res = await runAgentAutopilot(store);
-    assert.equal(res.ok, true);
-    assert.equal(res.client.name, 'Atelier Linha Clara');
-    assert.equal(res.autoDetected.delimiter, ';');
-    assert.equal(res.autoDetected.priceDecimalSeparator, ',');
-    assert(res.autoDetected.mappingConfidence >= 0.75);
-    assert.equal(res.steps.length, 8);
-    assert.equal(res.handoffs.verifiedRoles.length, 8);
-    assert.equal(res.reconciliation.ok, true);
-    assert.equal(res.reconciliation.matchedSkus, 5);
-    assert(res.economics.contribution! > 400);
-  } finally {
-    store.close();
-  }
+test('entrada assistida não inventa aprovação, custo, contato ou pedido; repetição não duplica efeitos', async () => {
+ const store=new Store(':memory:');try{
+  const res=await runAgentAutopilot(store);await runAgentAutopilot(store);
+  assert.equal(res.status,'needs_review');assert.equal(res.client.email,null);
+  assert.equal(res.economics.contribution,null);assert.equal(store.orders().length,0);
+  assert.deepEqual(store.setting('gates',{}),{});
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM ai_jobs').get()!.n,0);
+ }finally{store.close();}
 });

@@ -140,7 +140,7 @@ export function createApp(store: Store, port = 4318) {
         const vendorCol = columns.find(h => /marca|vendor|fabricante|brand|loja/i.test(h));
         const detectedBrand = (vendorCol && String(rows[0]?.[vendorCol] ?? '').trim()) || fname.replace(/\.(csv|xlsx)$/i, '').replace(/[-_]+/g, ' ') || 'Loja Identificada';
         const slug = detectedBrand.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'loja';
-        result = { columns, rows: rows.length, detectedFormat: { ...autoFmt, detectedBrand, detectedEmail: `operacao@${slug}.com.br` }, inferred: inferSupplierMapping(store, String(body.clientId ?? 'local'), columns, String(body.supplierKey ?? `fornecedor-${slug}`)) };
+        result = { columns, rows: rows.length, detectedFormat: { ...autoFmt, detectedBrand, detectedEmail: '' }, inferred: inferSupplierMapping(store, String(body.clientId ?? 'local'), columns, String(body.supplierKey ?? `fornecedor-${slug}`)) };
       }
       else if (req.method === 'POST' && path === '/api/orders') result = await service.create({ ...z.object({ name: z.string().min(1), email: z.email(), filename: z.string().max(200), data: z.string(), mapping: mappingSchema, profile: supplierProfileSchema.optional(), demo: z.boolean().default(false), service:z.enum(['catalog','combined']).default('catalog'),content:z.unknown().optional() }).parse(body), data: Buffer.from(body.data, 'base64') });
       else if (req.method === 'POST' && path === '/api/editorial') result=createEditorial(store,z.object({name:z.string().min(1),email:z.email(),service:z.enum(['diagnostic','content']),brief:z.unknown(),demo:z.literal(true)}).parse(body));

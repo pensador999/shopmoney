@@ -49,7 +49,7 @@ const FIELD_SYNONYMS:Record<string,string[]>={
 };
 
 export function inferSupplierMapping(store:Store,clientId:string,headers:string[],supplierKey='fornecedor-local') {
-  const clientOrders=store.orders().filter(o=>o.clientId===clientId&&o.scopeApproved&&o.mapping?.productId);
+  const clientOrders=store.orders().filter(o=>o.clientId===clientId&&o.scopeApproved&&o.mapping?.productId&&o.mapping.supplierKey===supplierKey);
   const learnedColumns:Record<string,Set<string>>={};
   for(const o of clientOrders){
     for(const k of ['productId','title','sku','price','barcode','description'] as const){
@@ -83,10 +83,10 @@ export function inferSupplierMapping(store:Store,clientId:string,headers:string[
   return {
     mapping:{
       supplierKey,
-      productId:mProductId.column||headers[0]||'product_id',
-      title:mTitle.column||headers[1]||'title',
-      sku:mSku.column||headers[2]||'sku',
-      price:mPrice.column||headers[3]||'price',
+      productId:mProductId.column,
+      title:mTitle.column,
+      sku:mSku.column,
+      price:mPrice.column,
       ...(mBarcode.column?{barcode:mBarcode.column}:{}),
       ...(mDesc.column?{description:mDesc.column}:{}),
       options,
