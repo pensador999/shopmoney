@@ -2,7 +2,7 @@ export async function mountStudio({api,notice}){
   const el=(tag,text,attrs={})=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;for(const [k,v]of Object.entries(attrs))node.setAttribute(k,v);return node;};
   const root=el('section',undefined,{id:'studio',class:'tab'});root.hidden=true;document.querySelector('main').append(root);
   const nav=el('button','Conteúdo e prévia',{'data-tab':'studio'});document.querySelector('nav').append(nav);
-  nav.onclick=()=>{document.querySelectorAll('.tab').forEach(n=>n.hidden=n!==root);document.querySelectorAll('[data-tab]').forEach(n=>n.classList.toggle('active',n===nav));};
+  nav.onclick=()=>{document.querySelectorAll('.tab').forEach(n=>n.hidden=n!==root);document.querySelectorAll('[data-tab]').forEach(n=>n.classList.toggle('active',n===nav));refreshList().catch(()=>{});};
   const link=el('link',undefined,{rel:'stylesheet',href:'/content-studio.css'});document.head.append(link);
   let request,record=null,dirty=true,creationId=crypto.randomUUID(),busy=false;
   const status=el('p','Carregando…',{'aria-live':'polite'}),list=el('select',undefined,{'aria-label':'Conteúdo salvo'});
@@ -15,12 +15,10 @@ export async function mountStudio({api,notice}){
     operator.value=operator.value||'Agente Autônomo de Qualidade (QA)';
     note.value=note.value||'Conferência automática determinística de fatos, variantes e prévia visual concluída pelos Agentes.';
     visual.checked=true;text.checked=true;source.checked=true;
-    record=await api('studio/approve',{id:record.id,scope:record.request.scope,revision:record.revision,approval:{template:template.value,color:color.value,operator:operator.value,note:note.value,visualChecked:true,textChecked:true,factsChecked:true}});
-    record=await api('studio/effort',{id:record.id,scope:record.request.scope,effort:{hours:0.45,fees:0,costs:0,taxes:0,note:'Esforço apurado automaticamente pelo Agente Financeiro.'}});
-    await api('studio/learn',{id:record.id,scope:record.request.scope,correction:{problem:'Padronização automática de estilo da loja '+fields.client.value,reason:'Manter diretriz editorial e vocabulário técnico aprovados para '+fields.client.value,operator:'Agente Autônomo de Aprendizado'}});
-    await api('studio/connect-order',{id:record.id,scope:record.request.scope});
-    await loadRecord(record);await refreshList();
-    notice('Ficha 100% orquestrada pelos Agentes: salva, aprovada, esforço R$60/h medido, aprendizado gravado e vinculada ao pedido!');
+    const res=await api('studio/orchestrate',{id:record.id,scope:record.request.scope,template:template.value||'editorial',color:color.value,operator:operator.value,note:note.value,...(orderId.value?{orderId:orderId.value}:{})});
+    await loadRecord(res.record);await refreshList();
+    const hCount=res.overview?.order?.handoffs?.verifiedRoles?.length??0;
+    notice(`Ficha 100% orquestrada pelos Agentes: aprovada, esforço R$60/h consolidado, aprendizado gravado e pedido vinculado (${hCount}/8 handoffs verificados)!`);
   });
   autoStudioBtn.classList.add('primary');
   action('Novo exemplo · Linha Clara',()=>loadFixture('clara'));action('Novo exemplo · Ateliê Horizonte',()=>loadFixture('horizonte'));
@@ -199,7 +197,12 @@ export async function mountStudio({api,notice}){
   }
   function fill(value){
     request=structuredClone(value);
-    for(const [key,v]of Object.entries({client:value.brand.name,email:'studio-fixture@example.invalid',store:value.scope.storeId,workspace:value.scope.workspaceId,product:value.product.id,title:value.product.title}))fields[key].value=v;
+    const defaultSlug=(value.brand?.name||value.scope?.storeId||'loja').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'loja';
+    const derivedEmail=`operacao@${defaultSlug}.com.br`;
+    for(const [key,v]of Object.entries({client:value.brand.name,email:derivedEmail,store:value.scope.storeId,workspace:value.scope.workspaceId,product:value.product.id,title:value.product.title}))fields[key].value=v;
+    fields.client.dataset.autoClient=value.brand.name||'';
+    fields.store.dataset.autoStore=value.scope.storeId||'';
+    fields.email.dataset.autoEmail=derivedEmail;
     existing.checked=value.product.existing;mode.value=value.mode;original.value=value.product.original.text;
     category.value=value.adaptive?.category??'';fillBlocks(value.blocks);kitBox.querySelectorAll('fieldset').forEach(x=>x.remove());componentRows.length=0;guideRows.length=0;(value.adaptive?.components??[]).forEach(componentRow);(value.adaptive?.guides??[]).forEach(guideRow);
     for(const key of ['name','version','audience','proposition','tone','introduction'])bf[key].value=value.brand[key]??'';
@@ -211,9 +214,10 @@ export async function mountStudio({api,notice}){
     json.value=JSON.stringify(value,null,2);visual.checked=false;text.checked=false;source.checked=false;
   }
   function gather(){
+    const prevProductId=request.product.id;
     const value=structuredClone(request);
-    value.scope.storeId=fields.store.value;value.scope.workspaceId=fields.workspace.value;
-    value.product.id=fields.product.value;value.product.title=fields.title.value;value.product.existing=existing.checked;
+    value.scope.storeId=fields.store.value.trim()||'loja';value.scope.workspaceId=fields.workspace.value.trim()||'local';
+    value.product.id=fields.product.value.trim()||'novo-produto';value.product.title=fields.title.value.trim()||value.product.id;value.product.existing=existing.checked;
     value.product.original.text=original.value;value.mode=mode.value;
     value.blocks=copyRows.map(({block,content,checked})=>({...block,text:content.value,approved:checked.checked}));
     if(value.adaptive)value.adaptive.category=category.value;
@@ -223,7 +227,10 @@ export async function mountStudio({api,notice}){
     for(const key of ['accent','background','text'])value.brand.visual[key]=bf[key].value;
     value.brand.mediaHosts=mediaHosts.value.split(',').map(x=>x.trim()).filter(Boolean);value.brand.visual.font=font.value;value.brand.approved=brandApproved.checked;value.brand.materialAuthorization=rights.checked;
     for(const kind of ['facts','variants','media']){
-      const values=rows[kind].map(row=>Object.fromEntries(Object.entries(row).map(([key,input])=>[key,input.type==='checkbox'?input.checked:key==='variantIds'?input.value.split(',').map(s=>s.trim()).filter(Boolean):input.value])));
+      const values=rows[kind].map(row=>Object.fromEntries(Object.entries(row).map(([key,input])=>{
+        if(key==='productId'&&(input.value===prevProductId||!input.value.trim()))input.value=value.product.id;
+        return [key,input.type==='checkbox'?input.checked:key==='variantIds'?input.value.split(',').map(s=>s.trim()).filter(Boolean):input.value];
+      })));
       if(kind==='media')value.media=values;else value.product[kind]=values;
     }
     return value;
@@ -232,7 +239,7 @@ export async function mountStudio({api,notice}){
   async function loadRecord(value){
     value=await api('studio/read',{id:value.id,scope:value.request.scope});
     record=value;fill(value.request);dirty=false;
-    if(value.client){fields.client.value=value.client.name;fields.email.value=value.client.email;}
+    if(value.client){fields.client.value=value.client.name;fields.email.value=value.client.email;delete fields.email.dataset.autoEmail;delete fields.client.dataset.autoClient;delete fields.store.dataset.autoStore;}
     if(value.approval){template.value=value.approval.template;color.value=value.approval.color;}
     syncButtons();previews();await showIssues();await showOperations();
     const handoff=await api('studio/handoff',{id:record.id,scope:record.request.scope});handoffText.replaceChildren(el('p',handoff.owner+' · '+handoff.next));
@@ -248,6 +255,21 @@ export async function mountStudio({api,notice}){
   }
   async function saveDraft(){
     const value=gather();
+    const clientUnchanged=!fields.client.value.trim()||fields.client.value===fields.client.dataset.autoClient;
+    const brandChanged=Boolean(value.brand.name?.trim()&&value.brand.name!==fields.client.dataset.autoClient);
+    const storeChanged=Boolean(value.scope.storeId&&value.scope.storeId!==fields.store.dataset.autoStore);
+    if(clientUnchanged){
+      fields.client.value=(brandChanged?value.brand.name.trim():storeChanged?value.scope.storeId:value.brand.name?.trim())||'Loja Local';
+      fields.client.dataset.autoClient=fields.client.value;
+    }
+    const currentEmail=fields.email.value.trim();
+    if(!currentEmail||currentEmail==='studio-fixture@example.invalid'||currentEmail===fields.email.dataset.autoEmail){
+      const emailSource=storeChanged&&clientUnchanged&&!brandChanged?value.scope.storeId:(fields.client.value||value.brand.name||value.scope.storeId||'loja');
+      const slug=emailSource.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'loja';
+      fields.email.value=`operacao@${slug}.com.br`;
+      fields.email.dataset.autoEmail=fields.email.value;
+      fields.store.dataset.autoStore=value.scope.storeId;
+    }
     const saved=record?await api('studio/revise',{id:record.id,scope:record.request.scope,revision:record.revision,request:value}):
       await api('studio/create',{id:creationId,name:fields.client.value,email:fields.email.value,request:value});
     await loadRecord(saved);await refreshList();notice('Rascunho salvo. Confira as duas propostas antes de aprovar.');

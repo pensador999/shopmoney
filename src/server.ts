@@ -92,6 +92,7 @@ export function createApp(store: Store, port = 4318) {
           result={...record,client,issues:checkRequest(record.request)};
         }
         else if(path==='/api/studio/operations')result=new StudioOperations(studio).overview(id,scope);
+        else if(path==='/api/studio/orchestrate')result=new StudioOperations(studio).orchestrate(id,scope,{template:body.template?templateSchema.parse(body.template):undefined,color:body.color===undefined?undefined:z.string().max(100).parse(body.color),operator:body.operator===undefined?undefined:z.string().max(100).parse(body.operator),note:body.note===undefined?undefined:z.string().max(1000).parse(body.note),orderId:body.orderId===undefined?undefined:z.uuid().parse(body.orderId)});
         else if(path==='/api/studio/connect-order')result=new StudioOperations(studio).connect(id,scope,body.orderId===undefined?undefined:z.uuid().parse(body.orderId));
         else if(path==='/api/studio/sync-scope')result=new StudioOperations(studio).synchronizeScope(id,scope);
         else if(path==='/api/studio/sync-effort')result=new StudioOperations(studio).synchronizeEffort(id,scope);
@@ -140,7 +141,10 @@ export function createApp(store: Store, port = 4318) {
         const vendorCol = columns.find(h => /marca|vendor|fabricante|brand|loja/i.test(h));
         const detectedBrand = (vendorCol && String(rows[0]?.[vendorCol] ?? '').trim()) || fname.replace(/\.(csv|xlsx)$/i, '').replace(/[-_]+/g, ' ') || 'Loja Identificada';
         const slug = detectedBrand.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'loja';
-        result = { columns, rows: rows.length, detectedFormat: { ...autoFmt, detectedBrand, detectedEmail: `operacao@${slug}.com.br` }, inferred: inferSupplierMapping(store, String(body.clientId ?? 'local'), columns, String(body.supplierKey ?? `fornecedor-${slug}`)) };
+        const inferred = inferSupplierMapping(store, String(body.clientId ?? 'local'), columns, String(body.supplierKey ?? `fornecedor-${slug}`));
+        const samplePrice = rows.map(r => String(r[inferred.mapping.price] ?? '').trim()).find(Boolean) ?? '';
+        const refinedPriceDec: '.' | ',' = /^\d+,\d{1,2}$/.test(samplePrice) ? ',' : /^\d+\.\d{1,2}$/.test(samplePrice) ? '.' : autoFmt.priceDecimalSeparator;
+        result = { columns, rows: rows.length, detectedFormat: { ...autoFmt, priceDecimalSeparator: refinedPriceDec, detectedBrand, detectedEmail: `operacao@${slug}.com.br` }, inferred };
       }
       else if (req.method === 'POST' && path === '/api/orders') result = await service.create({ ...z.object({ name: z.string().min(1), email: z.email(), filename: z.string().max(200), data: z.string(), mapping: mappingSchema, profile: supplierProfileSchema.optional(), demo: z.boolean().default(false), service:z.enum(['catalog','combined']).default('catalog'),content:z.unknown().optional() }).parse(body), data: Buffer.from(body.data, 'base64') });
       else if (req.method === 'POST' && path === '/api/editorial') result=createEditorial(store,z.object({name:z.string().min(1),email:z.email(),service:z.enum(['diagnostic','content']),brief:z.unknown(),demo:z.literal(true)}).parse(body));

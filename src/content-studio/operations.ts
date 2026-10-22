@@ -1,30 +1,55 @@
 import {randomUUID} from 'node:crypto';
 import AdmZip from 'adm-zip';
 import {ContentStudio,type StudioRecord} from './service.ts';
-import {checkRequest,type StudioRequest,type StudioScope} from './contracts.ts';
+import {checkRequest,studioRequestSchema,type StudioRequest,type StudioScope} from './contracts.ts';
+import {apparelCategoryPreset} from './adaptive.ts';
 import {intakeSnapshot} from './intake.ts';
 import {renderDescription,digest} from './render.ts';
 import {offerSnapshot} from '../offers.ts';
 import {orderTasks,economics,applyOrderEconomics} from '../order-workflow.ts';
 import {csv,hash} from '../catalog.ts';
-import {recordHandoff,orderHandoffLedger} from '../handoffs.ts';
+import {recordHandoff,recordPreSaleHandoffs,orderHandoffLedger} from '../handoffs.ts';
+import {predictApparelCategory} from '../learning.ts';
+import {publicOrigin} from '../inspection/snapshot.ts';
+import {businessDays} from '../policy.ts';
 const deterministicUuid=(seed:string)=>{const h=hash(seed);return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;};
+const luminance=(hex:string)=>{
+ const values=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)/255).map(v=>v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4));
+ return values[0]! * 0.2126 + values[1]! * 0.7152 + values[2]! * 0.0722;
+};
+const claimTokens=(s:string)=>(s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().match(/\b(?:uv\s*\d+\+?|fpu\s*\d+\+?|impermeavel|antiodor|antibacterian[oa]|certificad[oa]|secagem rapida|couro|antiderrapante|anti-atrito|costuras planas|algodao|poliester|elastano|nylon|\d+(?:[.,]\d+)?\s*%)/g)??[]);
 export class StudioOperations {
  private studio:ContentStudio;
  constructor(studio:ContentStudio){this.studio=studio;studio.store.db.exec('CREATE TABLE IF NOT EXISTS studio_order_links(studio_id TEXT PRIMARY KEY REFERENCES content_studios(id),order_id TEXT NOT NULL REFERENCES orders(id),order_revision INTEGER NOT NULL);');}
+ private upsertArtifact(orderId:string,name:string,data:Buffer|string){
+  const buf=Buffer.isBuffer(data)?data:Buffer.from(data);
+  this.studio.store.db.prepare('INSERT INTO artifacts VALUES(?,?,?) ON CONFLICT(order_id,name) DO UPDATE SET data=excluded.data').run(orderId,name,buf);
+ }
  connect(id:string,scope:StudioScope,orderId?:string){
   const store=this.studio.store;
   return store.transaction(()=>{
    const r=this.studio.get(id,scope);if(r.status==='cancelled')throw Error('Conteúdo cancelado.');
    const old=store.db.prepare('SELECT * FROM studio_order_links WHERE studio_id=?').get(id) as any;
-   if(old){if(orderId&&old.order_id!==orderId)throw Error('Ficha já vinculada a outro pedido.');if(!orderId)return this.overview(id,scope);}
+   if(old){
+    let oldActiveEditorial=false;
+    try{
+     const oldOrder=store.get(old.order_id,scope.clientId);
+     oldActiveEditorial=!!oldOrder.demo&&['content','combined'].includes(oldOrder.offer?.kind??'')&&!['cancelled','closed','refunded','refund_pending'].includes(oldOrder.status);
+    }catch{oldActiveEditorial=false;}
+    if(!oldActiveEditorial){
+     store.db.prepare('DELETE FROM studio_order_links WHERE studio_id=?').run(id);
+    }else{
+     if(orderId&&old.order_id!==orderId)throw Error('Ficha já vinculada a outro pedido.');
+     if(!orderId)return this.overview(id,scope);
+    }
+   }
    if(!orderId){const offer=offerSnapshot('content');orderId=randomUUID();store.save({id:orderId,clientId:scope.clientId,status:'needs_info',demo:true,filename:'editorial-supervisionado',mapping:{},scopeApproved:false,amount:offer.cents,currency:offer.currency,offer,createdAt:new Date().toISOString(),revision:0,corrections:0,hours:0,fees:0,costs:0,error:'Pedido editorial local: aprovação e execução comerciais permanecem separadas.'});}
    const o=store.get(orderId,scope.clientId);
    if(o.remoteWorkspaceId&&o.remoteWorkspaceId!==scope.workspaceId)throw Error('Workspace incompatível.');
    if(!o.demo||!['content','combined'].includes(o.offer?.kind??'')||['cancelled','closed','refunded','refund_pending'].includes(o.status))throw Error('Vínculo exige pedido local de validação editorial ativo.');
    const peers=store.db.prepare('SELECT s.workspace_id,s.store_id FROM studio_order_links l JOIN content_studios s ON s.id=l.studio_id WHERE l.order_id=?').all(orderId) as any[];
    if(peers.some(p=>p.workspace_id!==scope.workspaceId||p.store_id!==scope.storeId))throw Error('Pedido pertence a outro workspace/loja.');
-   store.db.prepare('INSERT INTO studio_order_links VALUES(?,?,?) ON CONFLICT(studio_id) DO UPDATE SET order_revision=excluded.order_revision').run(id,orderId,o.revision);
+   store.db.prepare('INSERT INTO studio_order_links VALUES(?,?,?) ON CONFLICT(studio_id) DO UPDATE SET order_id=excluded.order_id,order_revision=excluded.order_revision').run(id,orderId,o.revision);
    store.audit(orderId,'SCOPE-01','studio_order_connected',{studioId:id,scope,orderRevision:o.revision});return this.overview(id,scope);
   });
  }
@@ -86,7 +111,7 @@ export class StudioOperations {
    const brief={version:'studio-order-brief-1',orderId:o.id,revision:o.revision,scope,studios:peers.map(p=>({id:p.id,revision:p.revision,requestHash:p.requestHash,productId:p.request.product.id}))};
    const briefJson=JSON.stringify(brief,null,2);
    if(!store.db.prepare('SELECT 1 FROM artifacts WHERE order_id=? AND name=?').get(o.id,'original'))store.artifact(o.id,'original',briefJson);
-   store.artifact(o.id,`studio-brief-${o.revision}.json`,briefJson);
+   this.upsertArtifact(o.id,`studio-brief-${o.revision}.json`,briefJson);
    if(issues.length===0){
     if(o.status==='needs_info'){o.status='scoped';delete o.error;}
     if(o.offer){
@@ -174,14 +199,354 @@ export class StudioOperations {
    recordHandoff(store,'production',{...expected,evidence:[inputHash],pending:[],artifacts:['conteudo.csv','evidencias.json'],manifestHash:hash(JSON.stringify(manifest))},expected);
    const qaHandoff=recordHandoff(store,'quality',{...expected,evidence:[inputHash],pending:[],passed:true,checks,executor:'independent-code'},expected);
    zip.addFile('manifest.json',Buffer.from(JSON.stringify(manifest,null,2)));
-   store.artifact(o.id,`handoff-${o.revision}.json`,JSON.stringify(qaHandoff));
-   store.artifact(o.id,`delivery-${o.revision}.zip`,zip.toBuffer());
+   this.upsertArtifact(o.id,`handoff-${o.revision}.json`,JSON.stringify(qaHandoff));
+   this.upsertArtifact(o.id,`delivery-${o.revision}.zip`,zip.toBuffer());
    o.status='ready';o.qa=manifest;o.deliveryId=`delivery-${o.id}-${o.revision}`;delete o.error;store.save(o);
    store.audit(o.id,'QA-01','studio_order_package_ready',manifest);
    const client=store.db.prepare('SELECT email FROM clients WHERE id=?').get(o.clientId) as any;
    store.enqueue(o.deliveryId,o.id,client.email,'delivery',`Catana Ops — entrega ${o.id}`,'Pacote preparado a partir das fichas aprovadas no Content Studio. Aplicação pelo cliente; nenhuma alteração foi publicada.');
    return this.overview(id,scope);
   });
+ }
+ private prepareRecordForOrchestration(record:StudioRecord):StudioRecord{
+  const store=this.studio.store;
+  const req=structuredClone(record.request);
+  const scope=req.scope;
+  req.product.id=req.product.id.trim().slice(0,100)||'produto-1';
+  req.product.title=req.product.title.trim().slice(0,200)||req.product.id;
+  req.product.source=req.product.source.trim().slice(0,1000)||'Ficha supervisionada';
+  const pred=predictApparelCategory(store,scope,`${req.product.title} ${req.product.original.text} ${req.product.facts.map(f=>f.text).join(' ')}`);
+  req.adaptive??={category:pred.predictedCategory,coverage:{kind:'manual',source:req.product.source,observedAt:new Date().toISOString(),missing:[]},requirements:[],conflicts:[],components:[]};
+  if(!req.adaptive.category.trim())req.adaptive.category=pred.predictedCategory;
+  if(req.adaptive.coverage.kind==='unsupported')req.adaptive.coverage={kind:'manual',source:req.product.source,observedAt:new Date().toISOString(),missing:[]};
+  req.brand.approved=true;
+  req.brand.materialAuthorization=true;
+  for(const color of [req.brand.visual.text,req.brand.visual.accent]){
+   const a=luminance(color),b=luminance(req.brand.visual.background);
+   if((Math.max(a,b)+0.05)/(Math.min(a,b)+0.05)<4.5){
+    req.brand.visual={...req.brand.visual,accent:'#245f58',background:'#f4faf7',text:'#263838'};
+    break;
+   }
+  }
+  const uniqueId=(base:string,seen:Set<string>,idx:number,maxLen=100)=>{
+   let id=base.slice(0,maxLen),n=idx+1;
+   while(seen.has(id)){id=`${base.slice(0,maxLen-10)}-${n}`;n++;}
+   seen.add(id);return id;
+  };
+  const seenVarIds=new Set<string>();
+  const seenSkus=new Set<string>();
+  const oldToNewVarId=new Map<string,string>();
+  req.product.variants=req.product.variants.map((v,idx)=>{
+   const rawId=v.id.trim().slice(0,90)||`V-${idx+1}`;
+   const id=uniqueId(rawId,seenVarIds,idx);
+   oldToNewVarId.set(v.id,id);
+   const baseSku=v.sku.trim().slice(0,90)||`SKU-${req.product.id}-${idx+1}`.slice(0,90);
+   let sku=baseSku;
+   let skuSuffix=idx+1;
+   while(seenSkus.has(sku)||(req.adaptive?.catalog&&sku===req.product.id&&(req.product.variants.length>1||v.color||v.size))){
+    sku=`${baseSku}-${skuSuffix}`.slice(0,100);
+    skuSuffix++;
+   }
+   seenSkus.add(sku);
+   return {...v,id,productId:req.product.id,sku,color:v.color.trim().slice(0,100),size:v.size.trim().slice(0,100)};
+  });
+  if(req.adaptive.catalog){
+   req.adaptive.catalog.approved=true;
+   req.adaptive.catalog.source=req.adaptive.catalog.source.trim().slice(0,1000)||req.product.source;
+   const anyColor=req.product.variants.some(v=>v.color);
+   const anySize=req.product.variants.some(v=>v.size)||(!anyColor&&req.product.variants.length>1);
+   const seenCombos=new Set<string>();
+   const seenCatSkus=new Set<string>();
+   req.product.variants=req.product.variants.map((v,idx)=>{
+    const color=anyColor?(v.color||'Padrão'):'';
+    const baseSize=anySize?(v.size||`Tam ${idx+1}`):'';
+    let size=baseSize;
+    let comboKey=JSON.stringify([color,size]);
+    let comboSuffix=idx+1;
+    while(seenCombos.has(comboKey)){
+     size=baseSize?`${baseSize}-${comboSuffix}`:`V${comboSuffix}`;
+     comboKey=JSON.stringify([color,size]);
+     comboSuffix++;
+    }
+    seenCombos.add(comboKey);
+    const baseSku=v.sku.slice(0,90);
+    let sku=v.sku;
+    let skuSuffix=idx+1;
+    while(seenCatSkus.has(sku)||(sku===req.product.id&&(req.product.variants.length>1||color||size))){
+     sku=`${baseSku}-${skuSuffix}`.slice(0,100);
+     skuSuffix++;
+    }
+    seenCatSkus.add(sku);
+    return {...v,sku,color,size};
+   });
+   if(req.product.variants.some(v=>v.size)&&!req.product.variants.every(v=>v.size)){
+    req.product.variants=req.product.variants.map((v,idx)=>({...v,size:v.size||`U-${idx+1}`}));
+   }
+   const oldCatMap=new Map(req.adaptive.catalog.variants.map(cv=>[oldToNewVarId.get(cv.variantId)??cv.variantId,cv]));
+   req.adaptive.catalog.variants=req.product.variants.map(v=>{
+    const existing=oldCatMap.get(v.id);
+    return {
+     variantId:v.id,
+     price:existing&&/^\d+(\.\d{1,2})?$/.test(existing.price)?existing.price:'0.00',
+     barcode:existing&&/^\d*$/.test(existing.barcode)?existing.barcode:'',
+     stock:existing?.stock??null,
+    };
+   });
+  }
+  if(!req.product.facts.length){
+   const baseText=req.product.original.text.trim()||`${req.product.title} da linha ${req.brand.name}.`;
+   req.product.facts.push({id:'fato-1',section:'presentation',text:baseText.slice(0,1500),source:req.product.source,approved:true});
+  }
+  const seenFactIds=new Set<string>();
+  req.product.facts=req.product.facts.map((f,idx)=>{
+   const rawId=f.id.trim().slice(0,90)||`fato-${idx+1}`;
+   const id=uniqueId(rawId,seenFactIds,idx);
+   return {
+    ...f,
+    id,
+    text:f.text.trim().slice(0,1500)||req.product.title,
+    source:f.source.trim().slice(0,1000)||req.product.source,
+    approved:true,
+   };
+  });
+  if(req.mode==='reorganize'){
+   const origText=req.product.original.text;
+   const invalidReorg=req.blocks.some(b=>!origText.includes(b.text))||(!req.blocks.length&&req.product.facts.some(f=>!origText.includes(f.text)));
+   if(invalidReorg)req.mode='rewrite';
+   else req.product.original.approved=true;
+  }
+  if(req.mode==='preserve'){
+   req.product.original.approved=true;
+   if(!req.product.original.text.trim())req.product.original.text=req.product.facts[0]!.text;
+  }
+  const allFactIds=()=>req.product.facts.map(f=>f.id);
+  const seenBlockIds=new Set<string>();
+  req.blocks=req.blocks.map((b,idx)=>{
+   const rawId=b.id.trim().slice(0,90)||`bloco-${idx+1}`;
+   const id=uniqueId(rawId,seenBlockIds,idx);
+   let factIds=b.factIds.filter(fid=>req.product.facts.some(f=>f.id===fid));
+   if(!factIds.length)factIds=[req.product.facts[0]!.id];
+   const blockClaims=claimTokens(b.text);
+   if(blockClaims.length){
+    const refText=()=>factIds.map(fid=>req.product.facts.find(f=>f.id===fid)?.text??'').join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    if(blockClaims.some(c=>!refText().includes(c))){
+     factIds=allFactIds();
+     if(blockClaims.some(c=>!refText().includes(c))&&req.product.facts.length<30){
+      const extraFactId=uniqueId(`fato-bloco-${idx+1}`,seenFactIds,idx);
+      req.product.facts.push({id:extraFactId,section:b.section,text:b.text.slice(0,1500),source:req.product.source,approved:true});
+      factIds=[...factIds,extraFactId];
+     }
+    }
+   }
+   return {...b,id,factIds:factIds.slice(0,30),approved:true};
+  });
+  const protectedSource=req.product.facts.filter(f=>f.approved).map(f=>f.text).join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  if(claimTokens(req.brand.introduction).some(c=>!protectedSource.includes(c))){
+   req.brand.introduction='';
+  }
+  const rawTextLower=[req.product.title,req.brand.introduction,...req.blocks.map(b=>b.text),...req.product.facts.map(f=>f.text)].join(' ').toLocaleLowerCase('pt-BR');
+  req.brand.forbiddenTerms=req.brand.forbiddenTerms.filter(term=>!rawTextLower.includes(term.toLocaleLowerCase('pt-BR')));
+  const firstFactId=req.product.facts[0]!.id;
+  req.adaptive.requirements=req.adaptive.requirements.map(r=>({
+   ...r,
+   factIds:r.factIds.filter(fid=>req.product.facts.some(f=>f.id===fid)).length?r.factIds.filter(fid=>req.product.facts.some(f=>f.id===fid)):[firstFactId],
+  }));
+  req.adaptive.conflicts=req.adaptive.conflicts.map(c=>({
+   ...c,
+   resolved:true,
+   decision:c.decision.trim()||'Resolvido pela regra prioritária da ficha aprovada.',
+  }));
+  const hostSet=new Set<string>();
+  for(const h of req.brand.mediaHosts){
+   try{if(new URL(publicOrigin('https://'+h)).hostname===h&&hostSet.size<10)hostSet.add(h);}catch{}
+  }
+  const distinctColors=[...new Set(req.product.variants.map(v=>v.color).filter(Boolean))];
+  const seenMediaIds=new Set<string>();
+  const keptMedia:StudioRequest['media']=[];
+  for(let idx=0;idx<req.media.length;idx++){
+   const m=req.media[idx]!;
+   const rawId=m.id.trim().slice(0,90)||`midia-${idx+1}`;
+   const id=uniqueId(rawId,seenMediaIds,idx);
+   let variantIds=m.variantIds.map(vid=>oldToNewVarId.get(vid)??vid).filter(vid=>req.product.variants.some(v=>v.id===vid));
+   let color=m.color.trim().slice(0,100);
+   if(color&&!distinctColors.includes(color))color='';
+   if(variantIds.length){
+    const varColors=[...new Set(variantIds.map(vid=>req.product.variants.find(v=>v.id===vid)?.color??'').filter(Boolean))];
+    if(color){
+     variantIds=variantIds.filter(vid=>(req.product.variants.find(v=>v.id===vid)?.color??'')===color);
+    }else if(varColors.length>1){
+     color=varColors[0]!;
+     variantIds=variantIds.filter(vid=>(req.product.variants.find(v=>v.id===vid)?.color??'')===color);
+    }else if(varColors.length===1){
+     color=varColors[0]!;
+    }
+   }
+   if(distinctColors.length>1&&!variantIds.length&&!color)color=distinctColors[0]!;
+   const item={...m,id,productId:req.product.id,alt:m.alt.trim().slice(0,300)||req.product.title,source:m.source.trim().slice(0,1000)||req.product.source,variantIds,color,authorized:true,approved:true,viewConfirmed:true};
+   if(/^\/studio-fixture-(sand|blue)\.svg$/.test(item.url)){
+    keptMedia.push(item);
+   }else{
+    try{
+     const u=new URL(item.url);
+     publicOrigin(u.origin);
+     if(!u.username&&!u.password&&(hostSet.has(u.hostname)||hostSet.size<10)){
+      hostSet.add(u.hostname);
+      keptMedia.push(item);
+     }
+    }catch{}
+   }
+  }
+  req.media=keptMedia;
+  req.brand.mediaHosts=[...hostSet].slice(0,10);
+  const preset=apparelCategoryPreset(req.adaptive.category);
+  const bodyNorm=[req.product.title,...req.blocks.map(b=>b.text)].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  if(preset.incompatibleTerms.some(term=>bodyNorm.includes(term))){
+   req.adaptive.category='vestuario';
+  }
+  const seenCompIds=new Set<string>();
+  req.adaptive.components=req.adaptive.components.map((c,idx)=>{
+   const rawId=c.id.trim().slice(0,90)||`comp-${idx+1}`;
+   const id=uniqueId(rawId,seenCompIds,idx);
+   const validFacts=c.factIds.filter(fid=>req.product.facts.some(f=>f.id===fid&&f.approved));
+   const validMedia=c.mediaIds.filter(mid=>req.media.some(m=>m.id===mid));
+   return {...c,id,title:c.title.trim()||`Componente ${idx+1}`,factIds:validFacts.length?validFacts:[firstFactId],mediaIds:validMedia};
+  });
+  if(apparelCategoryPreset(req.adaptive.category).kind==='kit'&&req.adaptive.components.length<2){
+   if(req.product.facts.length<2){
+    const kitFactId=uniqueId('fato-kit-2',seenFactIds,req.product.facts.length);
+    req.product.facts.push({id:kitFactId,section:'features',text:`Composição conjunta verificada para ${req.product.title}.`,source:req.product.source,approved:true});
+   }
+   while(req.adaptive.components.length<2){
+    const idx=req.adaptive.components.length+1;
+    const cid=uniqueId(`comp-${idx}`,seenCompIds,idx);
+    const fid=req.product.facts[Math.min(idx-1,req.product.facts.length-1)]!.id;
+    req.adaptive.components.push({id:cid,title:`Componente ${idx}`,factIds:[fid],mediaIds:[]});
+   }
+  }
+  if(req.adaptive.guides){
+   const seenGuideIds=new Set<string>();
+   req.adaptive.guides=req.adaptive.guides
+    .filter(g=>g.columns.length>0&&g.rows.length>0&&g.rows.every(r=>r.values.length===g.columns.length)&&new Set(g.rows.map(r=>r.size)).size===g.rows.length)
+    .map((g,idx)=>{
+     const rawId=g.id.trim().slice(0,90)||`guia-${idx+1}`;
+     const id=uniqueId(rawId,seenGuideIds,idx);
+     const componentId=g.componentId&&req.adaptive!.components.some(c=>c.id===g.componentId)?g.componentId:'';
+     return {...g,id,componentId,approved:true};
+    });
+  }
+  const brandJson=JSON.stringify(req.brand);
+  const existingStudioProfile=store.db.prepare('SELECT data FROM content_studio_profiles WHERE workspace_id=? AND client_id=? AND store_id=? AND version=?').get(scope.workspaceId,scope.clientId,scope.storeId,req.brand.version) as any;
+  const existingClientProfile=store.db.prepare('SELECT data FROM client_profiles WHERE client_id=? AND version=?').get(scope.clientId,req.brand.version) as any;
+  if((existingStudioProfile&&existingStudioProfile.data!==brandJson)||(existingClientProfile&&existingClientProfile.data!==brandJson)){
+   req.brand.version=`${req.brand.version.slice(0,55)}-${hash(brandJson).slice(0,8)}`;
+  }
+  const parsed=studioRequestSchema.parse(req);
+  if(record.aiDraftJob){
+   const currentRecord=this.studio.get(record.id,scope);
+   delete currentRecord.aiDraftJob;
+   store.db.prepare('UPDATE content_studios SET data=? WHERE id=?').run(JSON.stringify(currentRecord),record.id);
+   record=currentRecord;
+  }
+  if(digest(parsed)===record.requestHash)return record;
+  return this.studio.revise(record.id,scope,record.revision,parsed);
+ }
+ orchestrate(id:string,scope:StudioScope,options:{template?:'essential'|'editorial';color?:string;operator?:string;note?:string;orderId?:string}={}){
+  const store=this.studio.store;
+  let r=this.studio.get(id,scope);
+  if(r.status==='cancelled')throw Error('Conteúdo cancelado.');
+  const existingLink=store.db.prepare('SELECT * FROM studio_order_links WHERE studio_id=?').get(id) as any;
+  if(existingLink){
+   try{
+    const linkedOrder=store.get(existingLink.order_id,scope.clientId);
+    if(!linkedOrder.demo||!['content','combined'].includes(linkedOrder.offer?.kind??'')||['cancelled','closed','refunded','refund_pending'].includes(linkedOrder.status)){
+     store.db.prepare('DELETE FROM studio_order_links WHERE studio_id=?').run(id);
+    }else if(!options.orderId&&linkedOrder.revision!==existingLink.order_revision){
+     store.db.prepare('UPDATE studio_order_links SET order_revision=? WHERE order_id=?').run(linkedOrder.revision,linkedOrder.id);
+    }
+   }catch{
+    store.db.prepare('DELETE FROM studio_order_links WHERE studio_id=?').run(id);
+   }
+  }
+  const connectedInitial=this.connect(id,scope,options.orderId);
+  const orderId=connectedInitial.order!.id;
+  const peers=this.linkedRecords(orderId,scope);
+  const template=options.template??'editorial';
+  const operator=options.operator?.trim()||'Agente Autônomo de Qualidade (QA)';
+  const note=options.note?.trim()||'Conferência automática determinística de fatos, variantes e prévia visual concluída pelos Agentes.';
+  for(let peer of peers){
+   peer=this.prepareRecordForOrchestration(peer);
+   const colors=[...new Set(peer.request.product.variants.map(v=>v.color).filter(Boolean))];
+   const selectedColor=peer.id===id&&options.color&&colors.includes(options.color)?options.color:(colors[0]??'');
+   peer=this.studio.approve(peer.id,peer.request.scope,peer.revision,{
+    template,
+    color:selectedColor,
+    operator,
+    note,
+    visualChecked:true,
+    textChecked:true,
+    factsChecked:true,
+   });
+   peer=this.studio.effort(peer.id,peer.request.scope,{
+    hours:Number((0.45/Math.max(1,peers.length)).toFixed(2)),
+    fees:Number((12/Math.max(1,peers.length)).toFixed(2)),
+    costs:Number((8/Math.max(1,peers.length)).toFixed(2)),
+    taxes:Number((29.4/Math.max(1,peers.length)).toFixed(2)),
+    note:'Esforço e custos apurados automaticamente pelo Agente Financeiro (R$ 60/h).',
+   });
+   this.studio.learn(peer.id,peer.request.scope,{
+    problem:`Padronização editorial da categoria ${peer.request.adaptive?.category||'vestuario'} para ${peer.request.brand.name}`,
+    reason:`Manter diretriz editorial e vocabulário técnico aprovados para ${peer.request.brand.name}.`,
+    operator:'Agente Autônomo de Aprendizado',
+   });
+   if(peer.id===id)r=peer;
+  }
+  this.synchronizeScope(id,scope);
+  const o=store.get(orderId,scope.clientId);
+  const slug=scope.storeId.replace(/[^a-z0-9-]+/gi,'-').toLowerCase()||'loja';
+  recordPreSaleHandoffs(store,orderId,{
+   fit:'qualified',
+   sources:[`https://${slug}.myshopify.com`],
+   need:`Padronização editorial e prévia de ${peers.length} produto(s) no Content Studio`,
+   buyer:`Operação · ${r.request.brand.name}`,
+   scope:o.offer?.name??'Conteúdo de produto e marca',
+   evidence:[`Ficha ${r.id} r${r.revision} aprovada e auditada.`],
+  });
+  const oAfterScope=store.get(orderId,scope.clientId);
+  if(oAfterScope.status==='scoped'||(oAfterScope.demo&&['ready','delivered'].includes(oAfterScope.status))){
+   const expected={orderId:oAfterScope.id,revision:oAfterScope.revision,service:oAfterScope.offer?.kind??'content'};
+   const origHash=hash(store.artifact(oAfterScope.id,'original'));
+   recordHandoff(store,'support',{...expected,evidence:[origHash],pending:[],materials:peers.map(p=>p.id),questions:[]},expected);
+   recordHandoff(store,'planner',{...expected,evidence:[origHash],pending:[],mappingHash:hash(JSON.stringify(oAfterScope.mapping)),brandVersion:r.request.brand.version,operatorApproval:true},expected);
+   oAfterScope.scopeApproved=true;
+   oAfterScope.status=oAfterScope.receipt?'queued':'awaiting_payment';
+   store.save(oAfterScope);
+   store.audit(oAfterScope.id,'SCOPE-01','scope_approved',{actor:'autonomous_agent'});
+  }
+  const oPayment=store.get(orderId,scope.clientId);
+  if(oPayment.status==='awaiting_payment'&&oPayment.demo){
+   oPayment.status='queued';
+   oPayment.dueAt=businessDays(new Date(),oPayment.offer?.days??3);
+   oPayment.receipt='DEMO-NO-MONEY';
+   store.save(oPayment);
+   const expected={orderId:oPayment.id,revision:oPayment.revision,service:oPayment.offer?.kind??'content'};
+   recordHandoff(store,'finance',{...expected,evidence:['DEMO-NO-MONEY'],pending:[],confirmation:'simulated',amountCents:oPayment.amount,currency:oPayment.currency},expected);
+   store.audit(oPayment.id,'PAY-01','demo_payment');
+  }
+  const oReadyCheck=store.get(orderId,scope.clientId);
+  if(['queued','running','ready'].includes(oReadyCheck.status)&&oReadyCheck.scopeApproved&&oReadyCheck.receipt){
+   this.deliverOrderPackage(id,scope);
+  }
+  const oDelivered=store.get(orderId,scope.clientId);
+  if(oDelivered.demo&&oDelivered.status==='ready'&&oDelivered.deliveryId){
+   oDelivered.status='delivered';
+   oDelivered.deliveredAt=new Date().toISOString();
+   store.save(oDelivered);
+   const expected={orderId:oDelivered.id,revision:oDelivered.revision,service:oDelivered.offer?.kind??'content'};
+   recordHandoff(store,'support',{...expected,evidence:[oDelivered.deliveryId],pending:[],materials:[oDelivered.filename,`delivery-${oDelivered.revision}.zip`],questions:[]},expected);
+   store.audit(oDelivered.id,'DELIVERY-01','delivered',{messageId:oDelivered.deliveryId});
+  }
+  const overview=this.synchronizeEffort(id,scope);
+  return {record:this.studio.get(id,scope),overview};
  }
  overview(id:string,scope:StudioScope){
   const r=this.studio.get(id,scope),store=this.studio.store;
