@@ -95,12 +95,13 @@ export class RemoteOperations {
             await svc.revise(id,Buffer.from(request.data,'base64'),request.filename,request.mapping,request.reason);
           }break;
         }
-        case 'revisionApprove':assert(o.status==='revision_approval','Revisão indisponível.');o.scopeApproved=true;o.status='queued';store.save(o);break;
+        case 'revisionApprove':svc.approveRevision(id);break;
         case 'learningPropose':proposeLearning(store,{...z.object({problem:z.string(),evidence:z.array(z.string()),proposedRule:z.string()}).strict().parse(extra),orderId:id,revision:o.revision});break;
         case 'learningReview':{const values=z.object({id:z.uuid(),approved:z.boolean(),testEvidence:z.string()}).strict().parse(extra);reviewLearning(store,values.id,o.clientId,{approved:values.approved,testEvidence:values.testEvidence});break;}
         case 'economics':{
-          const values=z.object({hours:z.number().finite().nonnegative(),fees:z.number().finite().nonnegative(),costs:z.number().finite().nonnegative(),taxes:z.number().finite().nonnegative(),note:z.string().min(10).max(2000)}).strict().parse(extra);
-          Object.assign(o,values,{economicsNote:values.note,economicsRecordedAt:new Date().toISOString()});store.save(o);break;
+          const stageHoursSchema=z.partialRecord(z.enum(['intake','plan','production','quality','delivery','adjustments']),z.number().finite().nonnegative()).optional();
+          const values=z.object({hours:z.number().finite().nonnegative().optional(),stageHours:stageHoursSchema,fees:z.number().finite().nonnegative(),costs:z.number().finite().nonnegative(),taxes:z.number().finite().nonnegative(),note:z.string().min(10).max(2000)}).strict().refine(v=>v.hours!==undefined||v.stageHours!==undefined,'Informe horas totais ou por etapa.').parse(extra);
+          svc.recordEconomics(id,values);break;
         }
         default:throw Error('Ação não permitida.');
       }

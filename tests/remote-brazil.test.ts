@@ -37,8 +37,16 @@ test('ponte remota simulada: cria, retoma, processa, baixa e não duplica produ�
   s=await f.remote.action(workspace,i.id,'process');assert.equal(s.payload.order.status,'ready');
   const count=f.objects.size;await f.remote.action(workspace,i.id,'process');assert.equal(f.objects.size,count);
   assert((await f.remote.download(workspace,i.id)).length>100);await f.remote.action(workspace,i.id,'demoDelivery');
-  assert.equal((await f.remote.create(workspace,i)).payload.order.id,i.id);assert.equal(f.objects.size,count);
-  s=await f.remote.action(workspace,i.id,'economics',{hours:1,fees:0,costs:0,taxes:0,note:'Custos sintéticos declarados'});assert.equal(s.payload.order.taxes,0);
+  assert.equal(f.objects.size,count+1);
+  assert.equal((await f.remote.create(workspace,i)).payload.order.id,i.id);assert.equal(f.objects.size,count+1);
+  s=await f.remote.action(workspace,i.id,'economics',{hours:1,stageHours:{intake:0.25,production:0.75},fees:0,costs:0,taxes:0,note:'Custos sintéticos declarados'});assert.equal(s.payload.order.taxes,0);
+  assert(s.payload.files.some(file=>file.name==='coordinator-0.json'));
+  assert.equal(s.payload.order.stageHours?.production,0.75);
+  await f.remote.action(workspace,i.id,'revise',{brief:{products:[{id:'P001',title:'Camiseta Revisada',description:'Algodão',source:'Fixture'}]},reason:'scope-adjustment'});
+  s=await f.remote.action(workspace,i.id,'revisionApprove');
+  assert.equal(s.payload.order.status,'queued');
+  assert(s.payload.files.some(file=>file.name==='support-1.json'));
+  assert(s.payload.files.some(file=>file.name==='planner-1.json'));
   assert.equal(f.state.lease_owner,null);
 });
 test('upload interrompido persiste identidade; repetir mesma solicitação recupera originais',async()=>{
