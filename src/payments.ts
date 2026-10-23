@@ -66,7 +66,7 @@ export class Payments {
           if (o.status === 'awaiting_payment') { o.status = 'queued'; o.dueAt = businessDays(new Date(), o.offer?.days ?? 3); }
           else if (o.status === 'cancelled') o.status = 'refund_pending';
           this.store.save(o);
-          if (o.offer && ['diagnostic', 'content', 'catalog', 'combined'].includes(o.offer.kind)) {
+          if (o.offer && ['diagnostic', 'images', 'content', 'catalog', 'combined'].includes(o.offer.kind)) {
             const expected = { orderId: o.id, revision: o.revision, service: o.offer.kind };
             recordHandoff(this.store, 'finance', { ...expected, evidence: [object.id], pending: [], confirmation: 'processor', amountCents: o.amount, currency: o.currency }, expected);
           }

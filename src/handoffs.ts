@@ -3,7 +3,7 @@ import { hash } from './catalog.ts';
 import type { AgentRole } from './business-context.ts';
 import type { Store } from './store.ts';
 
-const common={orderId:z.uuid(),revision:z.number().int().nonnegative(),service:z.enum(['diagnostic','content','catalog','combined']),evidence:z.array(z.string().min(1)).min(1),pending:z.array(z.string()),};
+const common={orderId:z.uuid(),revision:z.number().int().nonnegative(),service:z.enum(['diagnostic','content','catalog','combined','images']),evidence:z.array(z.string().min(1)).min(1),pending:z.array(z.string()),};
 export const handoffSchemas={
   research:z.object({...common,fit:z.enum(['qualified','unverified','declined']),sources:z.array(z.url()).min(1)}),
   sales:z.object({...common,need:z.string().min(1),buyer:z.string().min(1),scope:z.string().min(1)}),
@@ -64,13 +64,15 @@ export function orderHandoffLedger(store:Store,orderId:string) {
   const expected={orderId:o.id,revision:o.revision,service};
   const roles=Object.keys(handoffSchemas) as AgentRole[];
   const handoffs={} as Record<AgentRole,{recorded:boolean;verified:boolean;hash:string|null}>;
+  const rows=store.db.prepare('SELECT name, data FROM artifacts WHERE order_id=?').all(o.id) as {name:string;data:Buffer|Uint8Array}[];
+  const artifactsByName=new Map(rows.map(r=>[r.name,r.data]));
   for(const role of roles){
     const name=`${role}-${o.revision}.json`;
     const fallback=role==='quality'?`handoff-${o.revision}.json`:null;
-    const row=(store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id,name)??(fallback?store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id,fallback):null)) as any;
-    if(!row){handoffs[role]={recorded:false,verified:false,hash:null};continue;}
+    const data=artifactsByName.get(name)??(fallback?artifactsByName.get(fallback):undefined);
+    if(!data){handoffs[role]={recorded:false,verified:false,hash:null};continue;}
     try{
-      const parsed=JSON.parse(Buffer.from(row.data).toString());
+      const parsed=JSON.parse(Buffer.from(data).toString());
       const checked=validateHandoff(role,parsed,expected);
       handoffs[role]={recorded:true,verified:true,hash:checked.hash};
     }catch{

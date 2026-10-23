@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import AdmZip from 'adm-zip';
 import { Store, type Order } from './store.ts';
-import { mappingSchema, readTable, inspect, transform, qualityCheck, reconcileShopifyExport, csv, HEADERS, hash, productHandle, type Mapping } from './catalog.ts';
+import { mappingSchema, readTable, inspect, transform, qualityCheck, reconcileShopifyExport, selectHardCaseSample, buildBlingValidationCsv, csv, HEADERS, hash, productHandle, type Mapping, type BlingEditorialEnrichment } from './catalog.ts';
 import { policy, assert, businessDays } from './policy.ts';
 import { adaptSupplier, supplierProfileSchema, type SupplierProfile } from './supplier-adapter.ts';
 import { offerSnapshot, type ServiceKind, type OperationalStage } from './offers.ts';
@@ -92,7 +92,7 @@ export class Service {
       assert((o.productionAttempts ?? 0) < 3, 'Limite de execução atingido; revisão humana necessária.');
       o.productionAttempts = (o.productionAttempts ?? 0) + 1;
       o.status = 'running'; this.store.save(o);
-      if(o.offer&&['content','diagnostic'].includes(o.offer.kind)){
+      if(o.offer&&['content','diagnostic','images'].includes(o.offer.kind)){
         if(o.offer.kind==='content'&&!this.store.db.prepare('SELECT 1 FROM artifacts WHERE order_id=? AND name=?').get(id,`brief-${o.revision}.json`)&&this.store.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='studio_order_links'").get()){
           const linked=this.store.db.prepare('SELECT s.id,s.workspace_id,s.client_id,s.store_id FROM studio_order_links l JOIN content_studios s ON s.id=l.studio_id WHERE l.order_id=? LIMIT 1').get(id) as any;
           if(linked){new StudioOperations(new ContentStudio(this.store)).deliverOrderPackage(linked.id,{workspaceId:linked.workspace_id,clientId:linked.client_id,storeId:linked.store_id});return this.store.get(id);}
@@ -103,18 +103,27 @@ export class Service {
       const output = transform(rows, o.mapping), qa = qualityCheck(rows, output, o.mapping);
       assert(!qa.length, `Falha de qualidade: ${JSON.stringify(qa)}`);
       const content = csv(output, HEADERS);
-      const manifest = { policy: policy.version, orderId: id, revision: o.revision, originalSha256: hash(this.store.artifact(id, 'original')), sourceSha256: hash(this.store.artifact(id, o.revision ? `input-${o.revision}` : 'original')), mappingSha256: hash(JSON.stringify(o.mapping)), outputSha256: hash(content), products: o.report.productCount, variants: output.length, checks: 'Passed deterministic checks; Shopify test-store import is a separate gate.', demo: o.demo };
-      const instructions = `CATANA OPS — ${o.demo ? "DEMONSTRAÇÃO SINTÉTICA" : id}\n\nNovos produtos em rascunho. Cliente importa e publica. Faça backup e teste uma amostra; não habilite sobrescrita. Confira variantes, SKU/EAN, preços e frete/tributos. Imagens são referências não verificadas. Preserve UTF-8 e zeros à esquerda. Uma rodada de ajustes em sete dias; defeitos não consomem a rodada. Sem promessa de SEO ou conversão.\n`;
+      const { sampleCsv, sampleReport } = selectHardCaseSample(rows, o.mapping, o.supplierProfile, 5);
+      const manifest = { policy: policy.version, orderId: id, revision: o.revision, originalSha256: hash(this.store.artifact(id, 'original')), sourceSha256: hash(this.store.artifact(id, o.revision ? `input-${o.revision}` : 'original')), mappingSha256: hash(JSON.stringify(o.mapping)), outputSha256: hash(content), sampleSha256: sampleReport.sampleSha256, products: o.report.productCount, variants: output.length, sampleParents: sampleReport.selectedParentCount, sampleVariants: sampleReport.selectedVariantCount, checks: 'Passed deterministic checks; Shopify test-store import is a separate gate.', demo: o.demo };
+      const instructions = `CATANA OPS — ${o.demo ? "DEMONSTRAÇÃO SINTÉTICA" : id}\n\nNovos produtos em rascunho. Cliente importa e publica. Faça backup e teste antes a amostra preliminar (sample.csv com ${sampleReport.selectedParentCount} produto(s)-pai de maior risco; detalhes em sample-report.json); não habilite sobrescrita. Confira variantes, SKU/EAN, preços e frete/tributos. Imagens são referências não verificadas. Preserve UTF-8 e zeros à esquerda. Uma rodada de ajustes em sete dias; defeitos não consomem a rodada. Sem promessa de SEO ou conversão.\n`;
       const zip = new AdmZip();
+      const editorialMap = new Map<string, BlingEditorialEnrichment>();
       if(o.offer?.kind==='combined') {
         const brief=contentRequestSchema.parse(o.contentInput), editorial=prepareContent(brief);
         assert(brief.products.every(p=>rows.some((r:any)=>String(r[o.mapping.productId])===p.id)),'Conteúdo fora do lote revisado.');
         assert(checkContent(brief,editorial).length===0,'Conteúdo combinado reprovado.');
+        for (const p of editorial) {
+          editorialMap.set(p.id, { title: p.title, html: p.html, shortDescription: p.metaDescription });
+        }
         zip.addFile('conteudo-por-identificador.csv',Buffer.from(csv(editorial.map(p=>({ID:p.id,Title:p.title,'Body (HTML)':p.html,'SEO Title':p.seoTitle,'SEO Description':p.metaDescription})),['ID','Title','Body (HTML)','SEO Title','SEO Description'])));
         zip.addFile('conteudo-evidencias.json',Buffer.from(JSON.stringify(editorial,null,2)));
       }
+      const blingCsv = buildBlingValidationCsv(rows, o.mapping, { editorialByProductId: editorialMap.size ? editorialMap : undefined });
       zip.addFile('shopify.csv', Buffer.from(content));
-      zip.addFile('qa-report.json', Buffer.from(JSON.stringify({ ...manifest, issues: qa, sourceReport: o.report }, null, 2)));
+      zip.addFile('sample.csv', Buffer.from(sampleCsv));
+      zip.addFile('sample-report.json', Buffer.from(JSON.stringify(sampleReport, null, 2)));
+      zip.addFile('bling-validacao.csv', Buffer.from(blingCsv));
+      zip.addFile('qa-report.json', Buffer.from(JSON.stringify({ ...manifest, issues: qa, sourceReport: o.report, sampleReport }, null, 2)));
       zip.addFile('source-to-output.json', Buffer.from(JSON.stringify(rows.map((r: any) => ({ sourceProduct: r[o.mapping.productId], sourceSku: r[o.mapping.sku], outputHandle: productHandle(r[o.mapping.productId], o.mapping), transformations: ['column mapping', 'draft/unpublished', 'plain description HTML escaping'] })), null, 2)));
       if (o.supplierProfile) {
         zip.addFile('supplier-profile.json', this.store.artifact(id, `profile-${o.revision}.json`));
@@ -124,11 +133,13 @@ export class Service {
       zip.addFile('IMPORT-INSTRUCTIONS.txt', Buffer.from(instructions));
       if(o.offer){
         const base={orderId:id,revision:o.revision,service:o.offer.kind,evidence:[manifest.outputSha256],pending:[]};
-        recordHandoff(this.store,'production',{...base,artifacts:[`shopify-${o.revision}.csv`],manifestHash:hash(JSON.stringify(manifest))},base);
-        recordHandoff(this.store,'quality',{...base,passed:true,checks:['Fonte versus saída','Identificadores','Variantes','Preços'],executor:'independent-code'},base);
+        recordHandoff(this.store,'production',{...base,artifacts:[`shopify-${o.revision}.csv`,`sample-${o.revision}.csv`,`bling-${o.revision}.csv`],manifestHash:hash(JSON.stringify(manifest))},base);
+        recordHandoff(this.store,'quality',{...base,passed:true,checks:['Fonte versus saída','Identificadores','Variantes','Preços','Amostra preliminar 3–5 pais','Bling 59 colunas'],executor:'independent-code'},base);
       }
       this.store.transaction(() => {
         this.store.artifact(id, `shopify-${o.revision}.csv`, content);
+        this.store.artifact(id, `sample-${o.revision}.csv`, sampleCsv);
+        this.store.artifact(id, `bling-${o.revision}.csv`, blingCsv);
         this.store.artifact(id, `delivery-${o.revision}.zip`, zip.toBuffer());
         o.status = 'ready'; o.qa = manifest; delete o.error; this.store.save(o);
         this.store.audit(id, policy.rules.quality, 'qa_passed', manifest);

@@ -35,7 +35,7 @@ import {intakeSnapshot} from './content-studio/intake.ts';
 import {studioRequestSchema} from './content-studio/contracts.ts';
 
 export function createApp(store: Store, port = 4318) {
-  const token = randomBytes(24).toString('hex'), service = new Service(store),studio=new ContentStudio(store);
+  const token = randomBytes(24).toString('hex'), service = new Service(store), studio = new ContentStudio(store), studioOps = new StudioOperations(studio), examples = new Examples(store);
   const server = createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -72,7 +72,8 @@ export function createApp(store: Store, port = 4318) {
       let result: unknown;
       if(req.method==='GET'&&path==='/api/studio/list')result=studio.list();
       else if(req.method==='POST'&&path==='/api/studio/intake')result=intakeSnapshot(body.snapshot,studioScopeSchema.parse(body.scope),studioRequestSchema.shape.brand.parse(body.brand));
-      else if(req.method==='POST'&&path==='/api/studio/intake-batch')result=new StudioOperations(studio).intakeBatchToOrder(body.snapshot,studioScopeSchema.parse(body.scope),studioRequestSchema.shape.brand.parse(body.brand),body.orderId===undefined?undefined:z.uuid().parse(body.orderId));
+      else if(req.method==='POST'&&path==='/api/studio/intake-batch')result=studioOps.intakeBatchToOrder(body.snapshot,studioScopeSchema.parse(body.scope),studioRequestSchema.shape.brand.parse(body.brand),body.orderId===undefined?undefined:z.uuid().parse(body.orderId));
+      else if(req.method==='POST'&&path==='/api/studio/promote-diagnostic')result=studioOps.promoteDiagnosticToStudio(z.string().parse(body.orderId ?? body.id),body.scope,body.brand===undefined?undefined:studioRequestSchema.shape.brand.parse(body.brand));
       else if(req.method==='POST'&&path==='/api/studio/collect'){
         const scope=studioScopeSchema.parse(body.scope),brand=studioRequestSchema.shape.brand.parse(body.brand),url=new URL(z.string().max(2000).parse(body.url));
         if(url.protocol!=='https:'||url.search||url.hash||url.username||url.password||!/^\/products\/[^/]+\/?$/.test(url.pathname))throw Error('Use URL HTTPS de um produto Shopify sem parâmetros; alternativamente importe a ficha JSON.');
@@ -94,12 +95,12 @@ export function createApp(store: Store, port = 4318) {
           const record=studio.get(id,scope),client=store.db.prepare('SELECT name,email FROM clients WHERE id=?').get(record.request.scope.clientId);
           result={...record,client,issues:checkRequest(record.request)};
         }
-        else if(path==='/api/studio/operations')result=new StudioOperations(studio).overview(id,scope);
-        else if(path==='/api/studio/orchestrate')result=new StudioOperations(studio).orchestrate(id,scope,{template:body.template?templateSchema.parse(body.template):undefined,color:body.color===undefined?undefined:z.string().max(100).parse(body.color),operator:body.operator===undefined?undefined:z.string().max(100).parse(body.operator),note:body.note===undefined?undefined:z.string().max(1000).parse(body.note),orderId:body.orderId===undefined?undefined:z.uuid().parse(body.orderId)});
-        else if(path==='/api/studio/connect-order')result=new StudioOperations(studio).connect(id,scope,body.orderId===undefined?undefined:z.uuid().parse(body.orderId));
-        else if(path==='/api/studio/sync-scope')result=new StudioOperations(studio).synchronizeScope(id,scope);
-        else if(path==='/api/studio/sync-effort')result=new StudioOperations(studio).synchronizeEffort(id,scope);
-        else if(path==='/api/studio/deliver-order')result=new StudioOperations(studio).deliverOrderPackage(id,scope);
+        else if(path==='/api/studio/operations')result=studioOps.overview(id,scope);
+        else if(path==='/api/studio/orchestrate')result=studioOps.orchestrate(id,scope,{template:body.template?templateSchema.parse(body.template):undefined,color:body.color===undefined?undefined:z.string().max(100).parse(body.color),operator:body.operator===undefined?undefined:z.string().max(100).parse(body.operator),note:body.note===undefined?undefined:z.string().max(1000).parse(body.note),orderId:body.orderId===undefined?undefined:z.uuid().parse(body.orderId)});
+        else if(path==='/api/studio/connect-order')result=studioOps.connect(id,scope,body.orderId===undefined?undefined:z.uuid().parse(body.orderId));
+        else if(path==='/api/studio/sync-scope')result=studioOps.synchronizeScope(id,scope);
+        else if(path==='/api/studio/sync-effort')result=studioOps.synchronizeEffort(id,scope);
+        else if(path==='/api/studio/deliver-order')result=studioOps.deliverOrderPackage(id,scope);
         else if(path==='/api/studio/revise')result=studio.revise(id,scope,z.number().int().nonnegative().parse(body.revision),body.request);
         else if(path==='/api/studio/approve')result=studio.approve(id,scope,z.number().int().nonnegative().parse(body.revision),body.approval);
         else if(path==='/api/studio/cancel')result=studio.cancel(id,scope,z.number().int().nonnegative().parse(body.revision));
@@ -109,31 +110,34 @@ export function createApp(store: Store, port = 4318) {
         else if(path==='/api/studio/structured'){const task=studio.structuredAdvice(id,scope,z.enum(['planner','production','quality']).parse(body.role));result={id:enqueueAgent(store,task.role,task.input,task.clientId,task.id)};}
         else if(path==='/api/studio/apply-draft')result=studio.applyDraft(id,scope,z.number().int().nonnegative().parse(body.revision),z.string().parse(body.jobId));
         else if(path==='/api/studio/learn')result={id:studio.learn(id,scope,body.correction)};
-        else if(path==='/api/studio/revoke-example'){studio.get(id,scope);new Examples(store).revoke(scope,z.string().parse(body.exampleId),z.string().min(1).parse(body.operator));result={revoked:true};}
+        else if(path==='/api/studio/revoke-example'){studio.get(id,scope);examples.revoke(scope,z.string().parse(body.exampleId),z.string().min(1).parse(body.operator));result={revoked:true};}
         else if(path==='/api/studio/advice'){const task=studio.advice(id,scope,z.enum(['planner','production','quality']).parse(body.role));result={id:enqueueAgent(store,task.role,task.input,task.clientId,task.id)};}
         else if(path==='/api/studio/export'){
           const zip=studio.export(id,scope,z.number().int().nonnegative().parse(body.revision));
           res.setHeader('Content-Type','application/zip');res.setHeader('Content-Disposition',`attachment; filename="conteudo-${id}.zip"`);res.end(zip);return;
         }else throw Error('Rota de conteúdo desconhecida.');
       }
-      else if (req.method === 'GET' && path === '/api/state') result = {
-        fieldCase:existsSync(new URL('../artifacts/field-case-summary.json',import.meta.url))?JSON.parse(readFileSync(new URL('../artifacts/field-case-summary.json',import.meta.url),'utf8')):null,
-        orders: store.orders().map(o => {
-          const recRow = store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id, `reconciliation-${o.revision}.json`) as any;
-          return { ...o, economics: economics(o), tasks: orderTasks(o), handoffs: orderHandoffLedger(store, o.id), reconciliation: recRow ? JSON.parse(Buffer.from(recRow.data).toString()) : null };
-        }), gates: service.readiness(), policy, formats: supportedFormats(),
-        offers: Object.fromEntries(Object.entries(offers).map(([k, v]) => [k, { ...v, commercialEnabled: v.enabled && (store.setting('brlCommercialEnabled', false) || process.env.BRL_COMMERCIAL_ENABLED === 'true') }])),
-        recurringOffer,
-        coordination: store.orders().map(orderAssignment), team: agentContracts, business: businessContext,
-        messages: store.db.prepare('SELECT * FROM outbox ORDER BY created_at DESC LIMIT 100').all(),
-        inbox: store.db.prepare('SELECT * FROM inbox ORDER BY received_at DESC LIMIT 100').all(),
-        jobs: store.db.prepare('SELECT id,role,status,result,error,next_at FROM ai_jobs ORDER BY rowid DESC LIMIT 100').all(),
-        leads: store.db.prepare('SELECT * FROM leads').all(),
-        audit: store.db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 50').all(),
-        identity: store.setting('identity', {}), aiPaused: store.setting('aiPaused', false),
-        campaignAuthorized: store.setting('campaignAuthorized', false), routineAuthorized: store.setting('routineAuthorized', false),
-        integrations: { ai: process.env.AI_ENABLED === 'true', email: !!process.env.GMAIL_USER, send: process.env.MAIL_SEND_ENABLED === 'true', stripe: !!process.env.STRIPE_RESTRICTED_KEY, relay: !!process.env.PUBLIC_URL }, mapping: demoMapping,
-      };
+      else if (req.method === 'GET' && path === '/api/state') {
+        const allOrders = store.orders();
+        result = {
+          fieldCase:existsSync(new URL('../artifacts/field-case-summary.json',import.meta.url))?JSON.parse(readFileSync(new URL('../artifacts/field-case-summary.json',import.meta.url),'utf8')):null,
+          orders: allOrders.map(o => {
+            const recRow = store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id, `reconciliation-${o.revision}.json`) as any;
+            return { ...o, economics: economics(o), tasks: orderTasks(o), handoffs: orderHandoffLedger(store, o.id), reconciliation: recRow ? JSON.parse(Buffer.from(recRow.data).toString()) : null };
+          }), gates: service.readiness(), policy, formats: supportedFormats(),
+          offers: Object.fromEntries(Object.entries(offers).map(([k, v]) => [k, { ...v, commercialEnabled: v.enabled && (store.setting('brlCommercialEnabled', false) || process.env.BRL_COMMERCIAL_ENABLED === 'true') }])),
+          recurringOffer,
+          coordination: allOrders.map(orderAssignment), team: agentContracts, business: businessContext,
+          messages: store.db.prepare('SELECT * FROM outbox ORDER BY created_at DESC LIMIT 100').all(),
+          inbox: store.db.prepare('SELECT * FROM inbox ORDER BY received_at DESC LIMIT 100').all(),
+          jobs: store.db.prepare('SELECT id,role,status,result,error,next_at FROM ai_jobs ORDER BY rowid DESC LIMIT 100').all(),
+          leads: store.db.prepare('SELECT * FROM leads').all(),
+          audit: store.db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 50').all(),
+          identity: store.setting('identity', {}), aiPaused: store.setting('aiPaused', false),
+          campaignAuthorized: store.setting('campaignAuthorized', false), routineAuthorized: store.setting('routineAuthorized', false),
+          integrations: { ai: process.env.AI_ENABLED === 'true', email: !!process.env.GMAIL_USER, send: process.env.MAIL_SEND_ENABLED === 'true', stripe: !!process.env.STRIPE_RESTRICTED_KEY, relay: !!process.env.PUBLIC_URL }, mapping: demoMapping,
+        };
+      }
       else if (req.method === 'POST' && path === '/api/demo') result = await runDemo(store);
       else if (req.method === 'POST' && path === '/api/autopilot') result = await runAgentAutopilot(store, { filename: body.filename ? String(body.filename) : undefined, dataBase64: body.data ? String(body.data) : undefined, storeName: body.name ? String(body.name) : undefined, email: body.email ? String(body.email) : undefined, storeUrl: body.storeUrl ? String(body.storeUrl) : undefined });
       else if (req.method === 'POST' && path === '/api/inspection/diagnostic') {
@@ -231,7 +235,7 @@ export function createApp(store: Store, port = 4318) {
         result = { columns, rows: rows.length, detectedFormat: { ...autoFmt, priceDecimalSeparator: refinedPriceDec, detectedBrand, detectedEmail: `operacao@${slug}.com.br` }, inferred };
       }
       else if (req.method === 'POST' && path === '/api/orders') result = await service.create({ ...z.object({ name: z.string().min(1), email: z.email(), filename: z.string().max(200), data: z.string(), mapping: mappingSchema, profile: supplierProfileSchema.optional(), demo: z.boolean().default(false), service:z.enum(['catalog','combined']).default('catalog'),content:z.unknown().optional() }).parse(body), data: Buffer.from(body.data, 'base64') });
-      else if (req.method === 'POST' && path === '/api/editorial') result=createEditorial(store,z.object({name:z.string().min(1),email:z.email(),service:z.enum(['diagnostic','content']),brief:z.unknown(),demo:z.boolean().default(true)}).parse(body));
+      else if (req.method === 'POST' && path === '/api/editorial') result=createEditorial(store,z.object({name:z.string().min(1),email:z.email(),service:z.enum(['diagnostic','content','images']),brief:z.unknown(),demo:z.boolean().default(true)}).parse(body));
       else if (req.method === 'POST' && path === '/api/editorial/revise') result=reviseEditorial(store,z.string().parse(body.id),body.brief,z.enum(['scope-adjustment','defect']).parse(body.reason));
       else if (req.method === 'POST' && path === '/api/learning/propose') result=proposeLearning(store,body);
       else if (req.method === 'POST' && path === '/api/learning/review') result=reviewLearning(store,z.string().parse(body.id),z.string().parse(body.clientId),body.review);

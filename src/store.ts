@@ -43,6 +43,14 @@ export class Store {
       CREATE TABLE IF NOT EXISTS order_tasks(id TEXT PRIMARY KEY,order_id TEXT NOT NULL REFERENCES orders(id),data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS client_profiles(client_id TEXT NOT NULL REFERENCES clients(id),version TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(client_id,version));
       CREATE TABLE IF NOT EXISTS learning_proposals(id TEXT PRIMARY KEY,client_id TEXT NOT NULL REFERENCES clients(id),data TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_orders_client_id ON orders(client_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_order_id ON audit(order_id);
+      CREATE INDEX IF NOT EXISTS idx_outbox_order_status ON outbox(order_id, status);
+      CREATE INDEX IF NOT EXISTS idx_outbox_status_created ON outbox(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_ai_jobs_client_role_status ON ai_jobs(client_id, role, status);
+      CREATE INDEX IF NOT EXISTS idx_ai_jobs_status_next ON ai_jobs(status, next_at);
+      CREATE INDEX IF NOT EXISTS idx_order_tasks_order_id ON order_tasks(order_id);
+      CREATE INDEX IF NOT EXISTS idx_learning_proposals_client_id ON learning_proposals(client_id);
     `);
   }
   transaction<T>(fn: () => T): T {

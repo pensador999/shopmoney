@@ -24,7 +24,10 @@ export class ContentStudio {
     store.db.exec(`CREATE TABLE IF NOT EXISTS content_studios(id TEXT PRIMARY KEY,workspace_id TEXT NOT NULL,client_id TEXT NOT NULL REFERENCES clients(id),store_id TEXT NOT NULL,data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS content_studio_revisions(id TEXT NOT NULL REFERENCES content_studios(id),revision INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(id,revision));
       CREATE TABLE IF NOT EXISTS content_studio_packages(id TEXT NOT NULL REFERENCES content_studios(id),revision INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(id,revision));
-      CREATE TABLE IF NOT EXISTS content_studio_profiles(workspace_id TEXT NOT NULL,client_id TEXT NOT NULL REFERENCES clients(id),store_id TEXT NOT NULL,version TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(workspace_id,client_id,store_id,version));`);
+      CREATE TABLE IF NOT EXISTS content_studio_profiles(workspace_id TEXT NOT NULL,client_id TEXT NOT NULL REFERENCES clients(id),store_id TEXT NOT NULL,version TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(workspace_id,client_id,store_id,version));
+      CREATE TABLE IF NOT EXISTS studio_order_links(studio_id TEXT PRIMARY KEY REFERENCES content_studios(id),order_id TEXT NOT NULL REFERENCES orders(id),order_revision INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_content_studios_scope ON content_studios(workspace_id, client_id, store_id);
+      CREATE INDEX IF NOT EXISTS idx_studio_order_links_order_id ON studio_order_links(order_id);`);
   }
   get(id:string,scope:StudioScope):StudioRecord{
     studioScopeSchema.parse(scope);

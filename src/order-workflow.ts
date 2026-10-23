@@ -7,7 +7,7 @@ export function orderTasks(o: Order) {
     ['intake','Atendimento','Arquivo completo e pendências resolvidas', 'SCOPE-01', !!o.report?.ok, !o.report?.ok],
     ['plan','Planejamento','Mapeamento aprovado e rastreável', 'SCOPE-01', o.scopeApproved, o.status === 'scoped' || o.status === 'revision_approval'],
     ['payment','Financeiro','Pagamento confirmado pelo processador ou simulação identificada', 'PAY-01', !!o.receipt, o.status === 'awaiting_payment'],
-    ['production','Produção',o.offer?.kind==='diagnostic'?'Diagnóstico com evidências':o.offer?.kind==='content'?'Conteúdo aprovado por identificador':'CSV e pacote gerados', 'DATA-01', ['ready','delivered','closed'].includes(o.status), ['queued','running'].includes(o.status)],
+    ['production','Produção',o.offer?.kind==='diagnostic'?'Diagnóstico com evidências':o.offer?.kind==='content'?'Conteúdo aprovado por identificador':o.offer?.kind==='images'?'Padronização de imagens e manifesto de mídia':'CSV e pacote gerados', 'DATA-01', ['ready','delivered','closed'].includes(o.status), ['queued','running'].includes(o.status)],
     ['quality','Qualidade','Conferência independente sem divergências', 'QA-01', !!o.qa && ['ready','delivered','closed'].includes(o.status), o.status === 'needs_attention'],
     ['delivery','Atendimento','Entrega registrada, sem aceite presumido', 'DELIVERY-01', ['delivered','closed'].includes(o.status), o.status === 'ready'],
     ['economics','Financeiro','Horas, taxas e custos registrados', 'PAY-01', !!o.economicsRecordedAt, !!o.deliveredAt],

@@ -51,8 +51,8 @@ begin
    if r.payload->>'requestHash' is distinct from p_payload->>'requestHash' then raise exception 'Idempotency conflict';end if;
  elsif p_action='create' then
    o:=p_payload->'order';
-   if (o->>'id')::uuid is distinct from p_order or (o->>'remoteWorkspaceId')::uuid is distinct from p_workspace or o->>'demo' is distinct from 'true' or o->>'currency' is distinct from 'brl' or o->'offer'->>'commercialEnabled' is distinct from 'false' or coalesce(o->>'status','') not in ('scoped','needs_info') or coalesce(o->'offer'->>'kind','') not in ('diagnostic','content','catalog','combined') or coalesce(p_payload->>'requestHash','') !~ '^[a-f0-9]{64}$' then raise exception 'Invalid validation snapshot';end if;
-   insert into catanaops.clients(workspace_id,name,email) values(p_workspace,p_payload->'client'->>'name',lower(p_payload->'client'->>'email'))
+   if (o->>'id')::uuid is distinct from p_order or (o->>'remoteWorkspaceId')::uuid is distinct from p_workspace or o->>'demo' is distinct from 'true' or o->>'currency' is distinct from 'brl' or o->'offer'->>'commercialEnabled' is distinct from 'false' or coalesce(o->>'status','') not in ('scoped','needs_info') or coalesce(o->'offer'->>'kind','') not in ('diagnostic','images','content','catalog','combined') or coalesce(p_payload->>'requestHash','') !~ '^[a-f0-9]{64}$' then raise exception 'Invalid validation snapshot';end if;
+   insert into catanaops.clients(id,workspace_id,name,email) values(coalesce((p_payload->'client'->>'id')::uuid,gen_random_uuid()),p_workspace,p_payload->'client'->>'name',lower(p_payload->'client'->>'email'))
    on conflict(workspace_id,email) do update set name=excluded.name returning id into c;
    p_payload:=jsonb_set(jsonb_set(p_payload,'{order,clientId}',to_jsonb(c::text)),'{client,id}',to_jsonb(c::text));
    p_payload:=jsonb_set(p_payload,'{tasks}',coalesce((select jsonb_agg(jsonb_set(item,'{clientId}',to_jsonb(c::text))) from jsonb_array_elements(p_payload->'tasks') item),'[]'::jsonb));

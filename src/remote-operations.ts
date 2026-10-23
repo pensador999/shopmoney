@@ -8,6 +8,8 @@ import { hash, mappingSchema } from './catalog.ts';
 import { supplierProfileSchema } from './supplier-adapter.ts';
 import { assert } from './policy.ts';
 import { proposeLearning, reviewLearning } from './learning.ts';
+import { recordHandoff, recordPreSaleHandoffs } from './handoffs.ts';
+import { saveInspection, type InspectionEvidence } from './inspection/evidence.ts';
 
 const fileSchema=z.object({id:z.uuid(),name:z.string().regex(/^[\w.-]{1,120}$/),path:z.string(),sha256:z.string().regex(/^[a-f0-9]{64}$/),size:z.number().int().min(0).max(8_000_000)});
 export type RemoteFile=z.infer<typeof fileSchema>;
@@ -49,6 +51,10 @@ export class RemoteOperations {
       for(const raw of snapshot.files){const file=fileSchema.parse(raw);assert(file.path.startsWith(`${snapshot.order.remoteWorkspaceId}/${snapshot.order.id}/`),'Arquivo fora do pedido.');
         const r=await this.transport('/storage/v1/object/authenticated/catanaops-private/'+file.path,{method:'GET'});assert(r.ok,'Arquivo remoto indisponível.');
         const bytes=Buffer.from(await r.arrayBuffer());assert(bytes.length===file.size&&hash(bytes)===file.sha256,'Arquivo remoto adulterado.');s.artifact(snapshot.order.id,file.name,bytes);
+        if(/^inspection-\d+\.json$/.test(file.name)){
+          const parsed=JSON.parse(bytes.toString()) as InspectionEvidence;
+          saveInspection(s,{workspaceId:parsed.snapshot.scope.workspaceId,clientId:c.id},parsed);
+        }
       }return s;
     }catch(e){s.close();throw e;}
   }
@@ -63,9 +69,17 @@ export class RemoteOperations {
   }
   async create(workspace:string,input:unknown){
     z.uuid().parse(workspace);await this.authorize();
-    const base=z.object({id:z.uuid(),name:z.string().min(1).max(200),email:z.email(),service:z.enum(['diagnostic','content','catalog','combined']),demo:z.literal(true),brief:z.unknown().optional(),content:z.unknown().optional(),filename:z.string().max(200).optional(),data:z.string().max(7_000_000).optional(),mapping:mappingSchema.optional(),profile:supplierProfileSchema.optional()}).strict().parse(input);
+    const base=z.object({id:z.uuid(),name:z.string().min(1).max(200),email:z.email(),service:z.enum(['diagnostic','images','content','catalog','combined']),demo:z.literal(true),brief:z.unknown().optional(),inspection:z.unknown().optional(),content:z.unknown().optional(),filename:z.string().max(200).optional(),data:z.string().max(7_000_000).optional(),mapping:mappingSchema.optional(),profile:supplierProfileSchema.optional()}).strict().parse(input);
     const store=new Store(':memory:');try{
-      const order=base.service==='diagnostic'||base.service==='content'?createEditorial(store,{...base,brief:base.brief,service:base.service}):await new Service(store).create({...base,filename:z.string().parse(base.filename),data:Buffer.from(z.string().parse(base.data),'base64'),mapping:mappingSchema.parse(base.mapping),service:base.service});
+      if(base.service==='diagnostic'&&base.inspection){
+        const ev=base.inspection as InspectionEvidence;
+        store.db.prepare('INSERT INTO clients VALUES(?,?,?)').run(ev.snapshot.scope.clientId,base.email.trim().toLowerCase(),base.name);
+        saveInspection(store,ev.snapshot.scope,ev);
+      }
+      const order=(base.service==='diagnostic'||base.service==='images'||base.service==='content')?createEditorial(store,{...base,brief:base.brief,service:base.service}):await new Service(store).create({...base,filename:z.string().parse(base.filename),data:Buffer.from(z.string().parse(base.data),'base64'),mapping:mappingSchema.parse(base.mapping),service:base.service});
+      if(base.service==='diagnostic'&&base.inspection){
+        store.artifact(order.id,'inspection-0.json',JSON.stringify(base.inspection));
+      }
       const snapshot:Snapshot={...this.snapshot(store,order.id,workspace),requestHash:hash(JSON.stringify(base))};
       const created=await this.rpc({p_workspace:workspace,p_order:order.id,p_action:'create',p_payload:snapshot});
       // Metadata is durable before transfer: an interrupted upload is recoverable by retryUpload.
@@ -85,10 +99,42 @@ export class RemoteOperations {
         case 'demoPayment':svc.simulatePayment(id);break;
         case 'process':if(!['ready','delivered','closed'].includes(o.status))await svc.process(id);break;
         case 'demoDelivery':svc.delivered(id,o.deliveryId!);break;
+        case 'demoClose':{
+          assert(o.demo&&o.deliveredAt,'Encerramento simulado somente após entrega demonstrativa.');
+          assert(o.status==='delivered','Pedido não está na janela de ajustes.');
+          o.status='closed';o.closedAt=new Date().toISOString();store.save(o);
+          if(o.offer){
+            const expected={orderId:id,revision:o.revision,service:o.offer.kind};
+            recordHandoff(store,'coordinator',{...expected,evidence:[o.closedAt],pending:[],next:'Encerramento simulado sem aceite presumido',owner:'Coordenação'},expected);
+          }
+          store.audit(id,'DELIVERY-01','simulated_adjustment_window_elapsed');
+          break;
+        }
+        case 'accept':{
+          const req=z.object({evidence:z.string().min(1).max(1000)}).strict().parse(extra);
+          assert(o.status==='delivered','Registre a evidência do aceite.');
+          o.acceptedAt=new Date().toISOString();store.save(o);
+          store.audit(id,'DELIVERY-01','client_acceptance_recorded',{evidence:req.evidence});
+          break;
+        }
+        case 'reconcileImport':{
+          const req=z.object({exportedCsv:z.string().min(1),promoteGate:z.boolean().default(false)}).strict().parse(extra);
+          svc.reconcileImport(id,req.exportedCsv,req.promoteGate);
+          break;
+        }
+        case 'preSaleHandoff':{
+          const req=z.object({fit:z.enum(['qualified','unverified','declined']),sources:z.array(z.url()).min(1),need:z.string().min(1),buyer:z.string().min(1),scope:z.string().min(1),evidence:z.array(z.string().min(1)).optional()}).strict().parse(extra);
+          recordPreSaleHandoffs(store,id,req);
+          break;
+        }
         case 'cancel':svc.cancel(id);break;
         case 'revise':{
-          if(['diagnostic','content'].includes(o.offer?.kind??'')){
-            const request=z.object({brief:z.unknown(),reason:z.enum(['scope-adjustment','defect']).default('scope-adjustment')}).strict().parse(extra);
+          if(['diagnostic','images','content'].includes(o.offer?.kind??'')){
+            const request=z.object({brief:z.unknown(),inspection:z.unknown().optional(),reason:z.enum(['scope-adjustment','defect']).default('scope-adjustment')}).strict().parse(extra);
+            if(o.offer?.kind==='diagnostic'&&request.inspection){
+              const ev=request.inspection as InspectionEvidence;
+              saveInspection(store,{workspaceId:ev.snapshot.scope.workspaceId,clientId:o.clientId},ev);
+            }
             reviseEditorial(store,id,request.brief,request.reason);
           }else{
             const request=z.object({filename:z.string().max(200),data:z.string().max(7_000_000),mapping:mappingSchema,reason:z.enum(['scope-adjustment','defect']).default('scope-adjustment')}).strict().parse(extra);

@@ -55,8 +55,8 @@ test('ciclo HTTP preserva perfil, tarefas e custos até encerramento simulado', 
     assert.equal(Object.keys(state.team).length,8);
     assert(state.orders[0].tasks.every((t:any)=>t.state==='done'));
     const enabledOffers=Object.values(state.offers).filter((o:any)=>o.enabled);
-    assert.equal(enabledOffers.length,4);
-    assert.deepEqual(enabledOffers.map((o:any)=>o.shortName),['Diagnóstico R$ 190','Conteúdo R$ 490','Cadastro R$ 690','Combinado R$ 990']);
+    assert.equal(enabledOffers.length,5);
+    assert.deepEqual(enabledOffers.map((o:any)=>o.shortName),['Diagnóstico R$ 190','Conteúdo R$ 490','Cadastro R$ 690','Combinado R$ 990','Imagens R$ 290']);
     assert(enabledOffers.every((o:any)=>o.summary&&o.maxHours>0&&o.version==='br-2026-10-19.1'&&o.commercialEnabled===false));
     assert.equal(store.db.prepare('SELECT status FROM outbox').get()?.status,'draft');
     const live={...store.get(id),demo:false,paymentMode:'live' as const};

@@ -13,8 +13,8 @@ import { demoCsv, demoMapping } from '../src/demo.ts';
 import AdmZip from 'adm-zip';
 import { Payments } from '../src/payments.ts';
 export const brief={brand:{version:'1',audience:'Público de teste',proposition:'Clareza',tone:'Direto',forbiddenTerms:['milagroso'],materialAuthorization:true},products:[{id:'P001',title:'Camiseta sintética',facts:[{text:'Composição: 100% algodão.',source:'Ficha técnica sintética',approved:true}],copy:[],copyApproved:false}]};
-test('ofertas BRL versionadas, imagens bloqueadas e sem conversão de produto',async()=>{
-  assert.equal(offers.content.cents,49000);assert.throws(()=>offerSnapshot('images'),/bloqueada/);
+test('ofertas BRL versionadas, 5 ofertas avulsas habilitadas em simulação e sem conversão de produto',async()=>{
+  assert.equal(offers.content.cents,49000);assert.equal(offerSnapshot('images').cents,29000);assert.equal(offerSnapshot('images').commercialEnabled,false);
   const s=new Store(':memory:');try{const o=await new Service(s).create({name:'Marca',email:'m@example.com',filename:'t.csv',data:Buffer.from(demoCsv),mapping:demoMapping,demo:true});assert.equal(o.currency,'brl');assert.equal(o.amount,69000);assert.equal(o.offer?.maxProducts,20);assert.equal(s.artifact(o.id,'source-0.json').toString().includes('19.90'),true);}finally{s.close();}
 });
 test('conteúdo independente passa por escopo, produção, conferência e ZIP sem exigir SKU/preço',async()=>{

@@ -3,7 +3,7 @@ import { extname } from 'node:path';
 import AdmZip from 'adm-zip';
 import { Store } from './store.ts';
 import { Service } from './service.ts';
-import { readTable, normalizedPrice, csv, hash, type Mapping, type Row } from './catalog.ts';
+import { readTable, normalizedPrice, buildBlingValidationCsv, csv, hash, type Mapping, type Row, type BlingEditorialEnrichment } from './catalog.ts';
 import { inferSupplierMapping, predictApparelCategory, evaluateStoreAdaptation, proposeLearning, reviewLearning } from './learning.ts';
 import { recordHandoff, recordPreSaleHandoffs, orderHandoffLedger } from './handoffs.ts';
 import { economics } from './order-workflow.ts';
@@ -438,12 +438,37 @@ export async function runAgentAutopilot(store: Store, input: AutopilotInput = {}
   }
 
   if (studioSummaryRows.length) {
+    const editorialMap = new Map<string, BlingEditorialEnrichment>();
+    for (let i = 0; i < studioRecords.length; i++) {
+      const rec = studioRecords[i]!;
+      const summary = studioSummaryRows[i]!;
+      editorialMap.set(rec.request.product.id, {
+        title: rec.request.product.title,
+        html: summary['Body (HTML)'],
+        shortDescription: summary['SEO Description'],
+        category: rec.request.adaptive?.category ?? categoryPrediction.predictedCategory,
+        brand: rec.request.brand.name,
+      });
+    }
+    const blingCsv = buildBlingValidationCsv(rows, autoMapping, {
+      editorialByProductId: editorialMap,
+      stockColumn: stockCol,
+      categoryColumn: categoryCol,
+    });
     const studioCsvName = `conteudo-studio-${processed.revision}.csv`;
     const studioCsv = csv(studioSummaryRows, ['ID', 'Title', 'Body (HTML)', 'SEO Title', 'SEO Description']);
     store.artifact(order.id, studioCsvName, studioCsv);
+    store.db
+      .prepare('INSERT INTO artifacts VALUES(?,?,?) ON CONFLICT(order_id,name) DO UPDATE SET data=excluded.data')
+      .run(order.id, `bling-${processed.revision}.csv`, Buffer.from(blingCsv, 'utf8'));
     const deliveryZipName = `delivery-${processed.revision}.zip`;
     const deliveryZip = new AdmZip(store.artifact(order.id, deliveryZipName));
     deliveryZip.addFile(studioCsvName, Buffer.from(studioCsv, 'utf8'));
+    if (deliveryZip.getEntry('bling-validacao.csv')) {
+      deliveryZip.updateFile('bling-validacao.csv', Buffer.from(blingCsv, 'utf8'));
+    } else {
+      deliveryZip.addFile('bling-validacao.csv', Buffer.from(blingCsv, 'utf8'));
+    }
     store.db
       .prepare('INSERT INTO artifacts VALUES(?,?,?) ON CONFLICT(order_id,name) DO UPDATE SET data=excluded.data')
       .run(order.id, deliveryZipName, deliveryZip.toBuffer());
@@ -456,7 +481,7 @@ export async function runAgentAutopilot(store: Store, input: AutopilotInput = {}
           ...expected,
           evidence: [processed.qa?.outputSha256 ?? hash(studioCsv)],
           pending: [],
-          artifacts: [`shopify-${processed.revision}.csv`, studioCsvName],
+          artifacts: [`shopify-${processed.revision}.csv`, `sample-${processed.revision}.csv`, `bling-${processed.revision}.csv`, studioCsvName],
           manifestHash: hash(JSON.stringify(processed.qa ?? {})),
         },
         expected

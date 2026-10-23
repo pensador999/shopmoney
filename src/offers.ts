@@ -10,7 +10,7 @@ export const offers = {
     stageHoursBudget: { intake: 0.75, plan: 1.0, production: 1.75, quality: 1.0, delivery: 0.5, adjustments: 0.5 } },
   combined: { name: 'Lançamento combinado', shortName: 'Combinado R$ 990', summary: '20 cadastros + 10 conteúdos · 3 dias úteis', cents: 99000, maxProducts: 20, maxVariants: 200, days: 3, maxHours: 9.9, version: offerVersion, enabled: true,
     stageHoursBudget: { intake: 1.0, plan: 1.25, production: 3.0, quality: 1.5, delivery: 0.5, adjustments: 0.75 } },
-  images: { name: 'Padronização de imagens', shortName: 'Imagens R$ 290', summary: 'Até 10 produtos · bloqueada até validação técnica', cents: 29000, maxProducts: 10, maxVariants: 0, days: 3, maxHours: 2.9, version: offerVersion, enabled: false,
+  images: { name: 'Padronização de imagens', shortName: 'Imagens R$ 290', summary: 'Até 10 produtos · 3 dias úteis', cents: 29000, maxProducts: 10, maxVariants: 200, days: 3, maxHours: 2.9, version: offerVersion, enabled: true,
     stageHoursBudget: { intake: 0.25, plan: 0.25, production: 1.0, quality: 0.5, delivery: 0.25, adjustments: 0.25 } },
 } as const;
 export type ServiceKind = keyof typeof offers;

@@ -2,8 +2,11 @@ import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
 import ExcelJS from 'exceljs';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { policy, assert } from './policy.ts';
+
+export const BLING_HEADERS = JSON.parse(readFileSync(new URL('../schemas/bling-59.json', import.meta.url), 'utf8')).headers as string[];
 
 export const mappingSchema = z.object({
   supplierKey: z.string().min(1).max(100).default('supplier-1'),
@@ -229,3 +232,273 @@ export function reconcileShopifyExport(generatedCsv: string | Buffer, exportedCs
     evidenceHash,
   };
 }
+
+export type SampleReason =
+  | 'largest_variant_grid'
+  | 'leading_zero_identifiers'
+  | 'long_or_special_text'
+  | 'decimal_or_formatted_price'
+  | 'simple_or_edge_product'
+  | 'supplier_profile_inheritance'
+  | 'batch_coverage';
+
+export function selectHardCaseSample(
+  rows: Row[],
+  inputMapping: Mapping,
+  profile?: { id: string; version: string },
+  maxParents = 5
+) {
+  const mapping = mappingSchema.parse(inputMapping);
+  assert(rows.length > 0, 'Lote vazio para seleção de amostra.');
+  const parentOrder = [...new Set(rows.map(r => r[mapping.productId]))];
+  const clampedMax = Math.max(1, Math.min(maxParents, 10));
+  const targetCount = Math.min(clampedMax, parentOrder.length);
+
+  const groups = parentOrder.map((productId, index) => {
+    const groupRows = rows.filter(r => r[mapping.productId] === productId);
+    const idFields = [mapping.productId, mapping.sku, mapping.barcode].filter(Boolean) as string[];
+    let leadingZeroHits = 0;
+    for (const r of groupRows) {
+      for (const col of idFields) {
+        const val = (r[col] ?? '').trim();
+        if (/^0\d+/.test(val)) leadingZeroHits++;
+      }
+    }
+    const first = groupRows[0]!;
+    const titleText = first[mapping.title] ?? '';
+    const descText = mapping.description ? first[mapping.description] ?? '' : '';
+    const combinedText = `${titleText} ${descText}`;
+    const hasSpecialChars = /[&<>"']/.test(combinedText) || /[^\x20-\x7E]/.test(combinedText);
+    const textScore = combinedText.length + (hasSpecialChars ? 50 : 0);
+
+    const prices = groupRows.map(r => Number(normalizedPrice(r[mapping.price] ?? '0', mapping))).filter(Number.isFinite);
+    const priceSpread = prices.length > 1 ? Math.max(...prices) - Math.min(...prices) : 0;
+    const hasDecimalCents = groupRows.some(r => {
+      const p = normalizedPrice(r[mapping.price] ?? '', mapping);
+      return /\.\d*[1-9]/.test(p) || (r[mapping.price] ?? '').includes(',');
+    });
+    const isSimple = groupRows.length === 1 && (!mapping.options.length || mapping.options.every(o => !(first[o.column] ?? '').trim()));
+    const distinctOptions = new Set(groupRows.map(r => JSON.stringify(mapping.options.map(o => r[o.column] ?? '')))).size;
+
+    return {
+      productId,
+      index,
+      rows: groupRows,
+      variantCount: groupRows.length,
+      distinctOptions,
+      leadingZeroHits,
+      textScore,
+      hasSpecialChars,
+      priceSpread,
+      hasDecimalCents,
+      isSimple,
+    };
+  });
+
+  const selectedMap = new Map<string, Set<SampleReason>>();
+  const addSelection = (productId: string, reason: SampleReason) => {
+    const set = selectedMap.get(productId) ?? new Set<SampleReason>();
+    set.add(reason);
+    if (profile) set.add('supplier_profile_inheritance');
+    selectedMap.set(productId, set);
+  };
+
+  // 1. Maior grade de variantes
+  const byGrid = [...groups].sort((a, b) => b.variantCount - a.variantCount || b.distinctOptions - a.distinctOptions || a.index - b.index);
+  if (byGrid[0] && selectedMap.size < targetCount) {
+    addSelection(byGrid[0].productId, 'largest_variant_grid');
+  }
+
+  // 2. Identificadores com zeros à esquerda
+  const byLeadingZero = [...groups]
+    .filter(g => g.leadingZeroHits > 0)
+    .sort((a, b) => b.leadingZeroHits - a.leadingZeroHits || b.variantCount - a.variantCount || a.index - b.index);
+  if (byLeadingZero.length) {
+    const pick = byLeadingZero.find(g => !selectedMap.has(g.productId)) ?? byLeadingZero[0]!;
+    if (selectedMap.has(pick.productId) || selectedMap.size < targetCount) {
+      addSelection(pick.productId, 'leading_zero_identifiers');
+    }
+  }
+
+  // 3. Títulos/descrições longos ou com caracteres especiais
+  const byText = [...groups]
+    .filter(g => g.textScore > 0)
+    .sort((a, b) => b.textScore - a.textScore || a.index - b.index);
+  if (byText.length) {
+    const pick = byText.find(g => !selectedMap.has(g.productId)) ?? byText[0]!;
+    if (selectedMap.has(pick.productId) || selectedMap.size < targetCount) {
+      addSelection(pick.productId, 'long_or_special_text');
+    }
+  }
+
+  // 4. Preços decimais / variação de preço entre variantes
+  const byPrice = [...groups]
+    .filter(g => g.hasDecimalCents || g.priceSpread > 0)
+    .sort((a, b) => b.priceSpread - a.priceSpread || Number(b.hasDecimalCents) - Number(a.hasDecimalCents) || a.index - b.index);
+  if (byPrice.length) {
+    const pick = byPrice.find(g => !selectedMap.has(g.productId)) ?? byPrice[0]!;
+    if (selectedMap.has(pick.productId) || selectedMap.size < targetCount) {
+      addSelection(pick.productId, 'decimal_or_formatted_price');
+    }
+  }
+
+  // 5. Produto simples sem opções ou menor grade
+  const bySimple = [...groups].sort((a, b) => Number(b.isSimple) - Number(a.isSimple) || a.variantCount - b.variantCount || a.index - b.index);
+  if (bySimple.length) {
+    const pick = bySimple.find(g => !selectedMap.has(g.productId)) ?? bySimple[0]!;
+    if (selectedMap.has(pick.productId) || selectedMap.size < targetCount) {
+      addSelection(pick.productId, 'simple_or_edge_product');
+    }
+  }
+
+  // Garante preenchimento até targetCount (ex.: mínimo de 3 pais quando o lote possui >= 3 pais)
+  for (const g of byGrid) {
+    if (selectedMap.size >= targetCount) break;
+    if (!selectedMap.has(g.productId)) {
+      addSelection(g.productId, 'batch_coverage');
+    }
+  }
+
+  // Anota também critérios adicionais cumpridos pelos pais selecionados
+  for (const g of groups) {
+    const reasons = selectedMap.get(g.productId);
+    if (!reasons) continue;
+    if (g.leadingZeroHits > 0) reasons.add('leading_zero_identifiers');
+    if (g.hasDecimalCents || g.priceSpread > 0) reasons.add('decimal_or_formatted_price');
+    if (g.isSimple || g.variantCount === 1) reasons.add('simple_or_edge_product');
+    if (g.hasSpecialChars || g.textScore >= 60) reasons.add('long_or_special_text');
+  }
+
+  const selectedGroups = groups.filter(g => selectedMap.has(g.productId));
+  const sampleRows = selectedGroups.flatMap(g => g.rows);
+  const sampleOutput = transform(sampleRows, mapping);
+  const sampleCsv = csv(sampleOutput, HEADERS);
+
+  return {
+    sampleCsv,
+    sampleRows,
+    sampleOutput,
+    sampleReport: {
+      targetMinParents: Math.min(3, parentOrder.length),
+      maxParents: clampedMax,
+      totalParents: parentOrder.length,
+      selectedParentCount: selectedGroups.length,
+      selectedVariantCount: sampleOutput.length,
+      selectedParents: selectedGroups.map(g => ({
+        productId: g.productId,
+        handle: productHandle(g.productId, mapping),
+        variantCount: g.variantCount,
+        reasons: [...(selectedMap.get(g.productId) ?? [])],
+      })),
+      profileUsed: profile ? { id: profile.id, version: profile.version } : null,
+      sampleSha256: hash(sampleCsv),
+    },
+  };
+}
+
+export interface BlingEditorialEnrichment {
+  title?: string;
+  html?: string;
+  shortDescription?: string;
+  category?: string;
+  brand?: string;
+}
+
+export function buildBlingValidationCsv(
+  rows: Row[],
+  inputMapping: Mapping,
+  options: {
+    editorialByProductId?: Map<string, BlingEditorialEnrichment>;
+    stockColumn?: string;
+    categoryColumn?: string;
+  } = {}
+): string {
+  const mapping = mappingSchema.parse(inputMapping);
+  const result = inspect(rows, mapping);
+  assert(result.ok, JSON.stringify(result.issues));
+
+  const parentIds = [...new Set(rows.map(r => r[mapping.productId]))];
+  const blingRows: Row[] = [];
+  const emptyBlingRow = (): Row => Object.fromEntries(BLING_HEADERS.map(h => [h, '']));
+
+  for (const productId of parentIds) {
+    const groupRows = rows.filter(r => r[mapping.productId] === productId);
+    const first = groupRows[0]!;
+    const ed = options.editorialByProductId?.get(productId);
+    const title = (ed?.title ?? first[mapping.title] ?? productId).trim();
+    const rawDesc = mapping.description ? (first[mapping.description] ?? '').trim() : '';
+    const htmlDesc = ed?.html ?? (rawDesc ? html(rawDesc) : '');
+    const shortDesc = (ed?.shortDescription ?? rawDesc.replace(/\s+/g, ' ').trim() ?? title)
+      .trim()
+      .slice(0, 250);
+    const brand = ed?.brand ?? (mapping.vendor ? (first[mapping.vendor] ?? '').trim() : '');
+    const category = ed?.category ?? (options.categoryColumn ? (first[options.categoryColumn] ?? '').trim() : '');
+    const imageUrl = mapping.imageUrl ? (first[mapping.imageUrl] ?? '').trim() : '';
+
+    const isSimple =
+      groupRows.length === 1 &&
+      (!mapping.options.length || mapping.options.every(o => !(first[o.column] ?? '').trim()));
+
+    if (isSimple) {
+      const row = emptyBlingRow();
+      row['Código'] = first[mapping.sku];
+      row['Descrição'] = title;
+      row['Unidade'] = 'UN';
+      row['Preço'] = normalizedPrice(first[mapping.price], mapping).replace('.', ',');
+      row['Situação'] = 'Ativo';
+      row['Estoque'] = options.stockColumn ? (first[options.stockColumn] ?? '').trim() : '';
+      row['GTIN/EAN'] = mapping.barcode ? (first[mapping.barcode] ?? '').trim() : '';
+      row['Descrição Complementar'] = htmlDesc;
+      row['Produto Variação'] = 'Produto';
+      row['Código Pai'] = '';
+      row['Marca'] = brand;
+      row['Descrição Curta'] = shortDesc;
+      row['URL Imagens Externas'] = imageUrl;
+      row['Categoria do produto'] = category;
+      blingRows.push(row);
+    } else {
+      const parentRow = emptyBlingRow();
+      parentRow['Código'] = productId;
+      parentRow['Descrição'] = title;
+      parentRow['Unidade'] = 'UN';
+      parentRow['Situação'] = 'Ativo';
+      parentRow['Descrição Complementar'] = htmlDesc;
+      parentRow['Produto Variação'] = 'Produto';
+      parentRow['Código Pai'] = '';
+      parentRow['Marca'] = brand;
+      parentRow['Descrição Curta'] = shortDesc;
+      parentRow['URL Imagens Externas'] = imageUrl;
+      parentRow['Categoria do produto'] = category;
+      blingRows.push(parentRow);
+
+      for (const r of groupRows) {
+        const optParts = mapping.options.map(o => `${o.name}: ${(r[o.column] ?? '').trim()}`).filter(s => !s.endsWith(': '));
+        const varRow = emptyBlingRow();
+        varRow['Código'] = r[mapping.sku];
+        varRow['Descrição'] = optParts.length ? optParts.join('; ') : title;
+        varRow['Unidade'] = 'UN';
+        varRow['Preço'] = normalizedPrice(r[mapping.price], mapping).replace('.', ',');
+        varRow['Situação'] = 'Ativo';
+        varRow['Estoque'] = options.stockColumn ? (r[options.stockColumn] ?? '').trim() : '';
+        varRow['GTIN/EAN'] = mapping.barcode ? (r[mapping.barcode] ?? '').trim() : '';
+        varRow['Descrição Complementar'] = htmlDesc;
+        varRow['Produto Variação'] = 'Variação';
+        varRow['Código Pai'] = productId;
+        varRow['Marca'] = brand;
+        varRow['Descrição Curta'] = shortDesc;
+        varRow['URL Imagens Externas'] = mapping.imageUrl ? (r[mapping.imageUrl] ?? imageUrl).trim() : '';
+        varRow['Categoria do produto'] = category;
+        blingRows.push(varRow);
+      }
+    }
+  }
+
+  for (const row of blingRows) {
+    for (const value of Object.values(row)) {
+      assert(!/^[\s\u0000-\u001f]*[=+@-]/u.test(value), 'CSV Bling contém célula com possível fórmula.');
+    }
+  }
+
+  return stringify(blingRows, { header: true, columns: BLING_HEADERS, delimiter: ';', bom: true, record_delimiter: '\r\n' });
+}
+
