@@ -60,6 +60,14 @@ Ele é **idempotente** (`CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS`, `
 -- Fonte sincronizada com: schemas/supabase-brazil-operations.sql
 -- ============================================================================
 
+do $$ begin
+  if not exists (select 1 from pg_roles where rolname = 'catanaops_executor') then
+    create role catanaops_executor nologin nobypassrls;
+  end if;
+end $$;
+grant authenticated to catanaops_executor;
+grant usage,create on schema catanaops to catanaops_executor;
+
 create table if not exists catanaops.operation_snapshots (
  workspace_id uuid not null,
  order_id uuid not null,
@@ -77,7 +85,8 @@ create table if not exists catanaops.operation_snapshots (
 
 alter table catanaops.operation_snapshots enable row level security;
 revoke all on catanaops.operation_snapshots from public,anon,authenticated;
-grant select,insert,update on catanaops.operation_snapshots to authenticated;
+grant select on catanaops.operation_snapshots to authenticated;
+grant select,insert,update on catanaops.operation_snapshots to catanaops_executor;
 
 drop policy if exists operation_member_read on catanaops.operation_snapshots;
 create policy operation_member_read on catanaops.operation_snapshots for select to authenticated
@@ -92,10 +101,10 @@ create policy operation_member_update on catanaops.operation_snapshots for updat
 using(exists(select 1 from catanaops.workspace_members m where m.workspace_id=operation_snapshots.workspace_id and m.user_id=(select auth.uid())))
 with check(exists(select 1 from catanaops.workspace_members m where m.workspace_id=operation_snapshots.workspace_id and m.user_id=(select auth.uid())));
 
--- Permissões e políticas restritas a linhas de teste (mode='test') no workspace do operador
+-- Permissões restritas ao executor privado sob RLS; operadores não gravam diretamente nas tabelas
 grant usage on schema catanaops to authenticated;
-grant insert,update on catanaops.clients,catanaops.orders,catanaops.tasks to authenticated;
-grant insert on catanaops.order_revisions,catanaops.artifacts,catanaops.audit_events to authenticated;
+grant insert,update on catanaops.clients,catanaops.orders,catanaops.tasks to catanaops_executor;
+grant insert on catanaops.order_revisions,catanaops.artifacts,catanaops.audit_events to catanaops_executor;
 
 drop policy if exists brazil_client_insert on catanaops.clients;
 create policy brazil_client_insert on catanaops.clients for insert to authenticated
@@ -127,8 +136,8 @@ create policy brazil_task_update on catanaops.tasks for update to authenticated
 using(exists(select 1 from catanaops.orders o join catanaops.workspace_members m on m.workspace_id=o.workspace_id where o.workspace_id=tasks.workspace_id and o.id=tasks.order_id and o.mode='test' and m.user_id=(select auth.uid())))
 with check(exists(select 1 from catanaops.orders o join catanaops.workspace_members m on m.workspace_id=o.workspace_id where o.workspace_id=tasks.workspace_id and o.id=tasks.order_id and o.mode='test' and m.user_id=(select auth.uid())));
 
--- Função RPC transacional: public.catanaops_operation
-create or replace function public.catanaops_operation(
+-- Função privada executora (catanaops.operation_execute) + wrapper público (public.catanaops_operation)
+create or replace function catanaops.operation_execute(
  p_workspace uuid,
  p_order uuid,
  p_action text,
@@ -137,7 +146,7 @@ create or replace function public.catanaops_operation(
  p_generation bigint default null,
  p_version bigint default null
 )
-returns jsonb language plpgsql security invoker set search_path='' as $$
+returns jsonb language plpgsql security definer set search_path='' as $$
 declare r catanaops.operation_snapshots%rowtype; c uuid; o jsonb; t jsonb; f jsonb; role_name text; kind_name text; state_name text; rev integer;
 begin
  if auth.uid() is null or not exists(select 1 from catanaops.workspace_members where workspace_id=p_workspace and user_id=auth.uid()) then raise exception 'Workspace membership required' using errcode='42501';end if;
@@ -197,6 +206,24 @@ begin
  return jsonb_build_object('payload',r.payload,'version',r.version,'generation',r.generation,'lease_owner',r.lease_owner);
 end $$;
 
+alter function catanaops.operation_execute(uuid,uuid,text,jsonb,uuid,bigint,bigint) owner to catanaops_executor;
+revoke create on schema catanaops from catanaops_executor;
+revoke all on function catanaops.operation_execute(uuid,uuid,text,jsonb,uuid,bigint,bigint) from public,anon;
+grant execute on function catanaops.operation_execute(uuid,uuid,text,jsonb,uuid,bigint,bigint) to authenticated;
+
+create or replace function public.catanaops_operation(
+ p_workspace uuid,
+ p_order uuid,
+ p_action text,
+ p_payload jsonb default null,
+ p_owner uuid default null,
+ p_generation bigint default null,
+ p_version bigint default null
+)
+returns jsonb language sql security invoker set search_path='' as $$
+ select catanaops.operation_execute(p_workspace,p_order,p_action,p_payload,p_owner,p_generation,p_version)
+$$;
+
 revoke all on function public.catanaops_operation(uuid,uuid,text,jsonb,uuid,bigint,bigint) from public,anon;
 grant execute on function public.catanaops_operation(uuid,uuid,text,jsonb,uuid,bigint,bigint) to authenticated;
 
@@ -242,13 +269,13 @@ end $$;
 
 ## 4. Verificação Pós-Migração no SQL Editor
 
-Após rodar o script da seção 3, execute a query abaixo para confirmar que a função `public.catanaops_operation` e as políticas RLS estão ativas:
+Após rodar o script da seção 3, execute a query abaixo para confirmar que as funções `catanaops.operation_execute`, `public.catanaops_operation` e as políticas RLS estão ativas:
 
 ```sql
--- Confirma a assinatura e definição da RPC
+-- Confirma a assinatura e definição das RPCs
 select routine_schema, routine_name, security_type
 from information_schema.routines
-where routine_name in ('catanaops_operation', 'claim_task');
+where routine_name in ('operation_execute', 'catanaops_operation', 'claim_task');
 
 -- Confirma políticas RLS na tabela operation_snapshots
 select schemaname, tablename, policyname, cmd

@@ -311,17 +311,51 @@ test('Frente 3: Promoção 1-clique LeakFinder (R$ 190) -> Content Studio (R$ 49
     assert.equal(promoted.studios.length, 1);
     assert.equal(promoted.studios[0]!.request.product.title, 'Vestido Brisa Sol');
 
-    // Orquestra a ficha promovida (avançando revision e gerando entrega com bling-validacao.csv via deliverOrderPackage)
+    // Orquestra a ficha promovida em modo supervisionado e aprova/entrega após revisão do operador
     const studioScope = promoted.scope;
     const orchestrated = ops.orchestrate(promoted.studios[0]!.id, studioScope, {
       template: 'editorial',
       operator: 'Operador Teste',
-      note: 'Ficha promovida do diagnóstico aprovada e empacotada.',
+      note: 'Ficha promovida em revisão supervisionada.',
     });
-    assert.equal(orchestrated.overview.order?.status, 'delivered');
-    const studioDeliveryZip = new AdmZip(store.artifact(promoted.contentOrder.id, 'delivery-0.zip'));
+    assert.equal(orchestrated.mode, 'supervised');
+    assert.equal(orchestrated.requiresOperatorApproval, true);
+    assert.equal(orchestrated.overview.order?.status, 'needs_info');
+
+    const revReq = structuredClone(promoted.studios[0]!.request);
+    revReq.brand.version = `${revReq.brand.version}-aprovada`;
+    revReq.brand.approved = true;
+    revReq.brand.materialAuthorization = true;
+    revReq.brand.mediaHosts = ['atelier-brisa.myshopify.com', 'cdn.shopify.com'];
+    revReq.product.facts = [
+      { id: 'fact-1', section: 'presentation', text: 'Vestido leve de viscose.', source: 'Snapshot validado', approved: true },
+    ];
+    revReq.blocks = [
+      { id: 'block-1', section: 'presentation', text: 'Vestido leve de viscose.', factIds: ['fact-1'], approved: true },
+    ];
+    revReq.media = revReq.media.map(m => ({ ...m, color: 'Areia', authorized: true, approved: true, view: 'front' as const, viewConfirmed: true }));
+    const revRec = studio.revise(promoted.studios[0]!.id, studioScope, promoted.studios[0]!.revision, revReq);
+    // Revalida que a revisão invalidou pedido vinculado e re-sincroniza escopo supervisionado
+    ops.connect(revRec.id, studioScope, promoted.contentOrder.id);
+    const synced = ops.synchronizeScope(revRec.id, studioScope);
+    assert.equal(synced.order?.status, 'scoped');
+    studio.approve(revRec.id, studioScope, revRec.revision, {
+      template: 'editorial',
+      color: 'Areia',
+      operator: 'Operador Teste',
+      note: 'Ficha promovida do diagnóstico aprovada após conferência humana.',
+      visualChecked: true,
+      textChecked: true,
+      factsChecked: true,
+    });
+    svc.approve(promoted.contentOrder.id);
+    svc.simulatePayment(promoted.contentOrder.id);
+    const deliveredPkg = ops.deliverOrderPackage(revRec.id, studioScope);
+    assert.equal(deliveredPkg.order?.status, 'ready');
+    const currentContentOrder = store.get(promoted.contentOrder.id);
+    const studioDeliveryZip = new AdmZip(store.artifact(promoted.contentOrder.id, `delivery-${currentContentOrder.revision}.zip`));
     assert(studioDeliveryZip.getEntry('bling-validacao.csv'));
-    assert(store.artifact(promoted.contentOrder.id, 'bling-0.csv').toString().startsWith('\uFEFFID;Código;'));
+    assert(store.artifact(promoted.contentOrder.id, `bling-${currentContentOrder.revision}.csv`).toString().startsWith('\uFEFFID;Código;'));
 
     // Repetir chamada mesmo após revisão da ficha é idempotente (reaproveita ficha revisada sem erro de hash)
     const promotedAgain = ops.promoteDiagnosticToStudio(diagOrder.id);
@@ -351,12 +385,39 @@ test('Frente 3: Promoção 1-clique LeakFinder (R$ 190) -> Content Studio (R$ 49
   }
 });
 
-test('Frente 1 + 3 + 4: Autopilot e StudioOperations.deliverOrderPackage incluem sample.csv, sample-report.json e bling-validacao.csv enriquecido, e SQLite cria todos os índices secundários', async () => {
+test('Frente 1 + 3 + 4: Autopilot supervisionado sugere mapeamento, Service.process inclui sample.csv, sample-report.json e bling-validacao.csv enriquecido, e SQLite cria todos os índices secundários', async () => {
   const store = new Store(':memory:');
   try {
     const auto = await runAgentAutopilot(store, {});
     assert.equal(auto.ok, true);
-    const zip = new AdmZip(store.artifact(auto.orderId, 'delivery-0.zip'));
+    assert.equal(auto.mode, 'supervised-intake');
+    assert.equal(auto.status, 'needs_review');
+    assert.equal(auto.orderId, null);
+
+    const svc = new Service(store);
+    const csvData = [
+      'Ref_Peca;Nome_Produto;Cod_Item;Vlr_Venda;Cod_Barras_EAN13;Grade_Cor;Grade_Tam;Saldo_Est;Categoria_Item;Marca_Fabricante;Descricao_Tecnica',
+      'ALC-101;Camisa Linho Puro Respiravel;ALC-101-AR-P;249,90;7891234560011;Areia;P;12;Camisa;Atelier Linha Clara;100% linho puro certificada.',
+      'ALC-101;Camisa Linho Puro Respiravel;ALC-101-AR-M;249,90;7891234560012;Areia;M;18;Camisa;Atelier Linha Clara;100% linho puro certificada.',
+      'ALC-205;Calca Alfaiataria Sarja Premium;ALC-205-PR-M;289,90;7891234560021;Preto;M;14;Calca;Atelier Linha Clara;Sarja 98% algodao 2% elastano.',
+    ].join('\n');
+    const order = await svc.create({
+      name: 'Atelier Linha Clara',
+      email: 'operacao@linha-clara.com.br',
+      filename: 'catalogo.csv',
+      data: Buffer.from(csvData, 'utf8'),
+      mapping: {
+        ...auto.autoDetected.mapping,
+        csvDelimiter: auto.autoDetected.delimiter,
+        priceDecimalSeparator: auto.autoDetected.priceDecimalSeparator,
+      },
+      demo: true,
+      service: 'catalog',
+    });
+    svc.approve(order.id);
+    svc.simulatePayment(order.id);
+    const processed = await svc.process(order.id);
+    const zip = new AdmZip(store.artifact(processed.id, 'delivery-0.zip'));
     const entries = zip.getEntries().map(e => e.entryName);
     assert(entries.includes('shopify.csv'));
     assert(entries.includes('sample.csv'));
@@ -367,8 +428,8 @@ test('Frente 1 + 3 + 4: Autopilot e StudioOperations.deliverOrderPackage incluem
     assert(sampleReport.selectedParentCount >= 1);
     const blingText = zip.readAsText('bling-validacao.csv');
     assert(blingText.startsWith('\uFEFFID;Código;Descrição;'));
-    assert(store.artifact(auto.orderId, 'sample-0.csv').toString().startsWith('Title,URL handle'));
-    assert(store.artifact(auto.orderId, 'bling-0.csv').toString().startsWith('\uFEFFID;Código;'));
+    assert(store.artifact(processed.id, 'sample-0.csv').toString().startsWith('Title,URL handle'));
+    assert(store.artifact(processed.id, 'bling-0.csv').toString().startsWith('\uFEFFID;Código;'));
 
     // Verifica todos os índices secundários exigidos no SQLite
     new ContentStudio(store);
@@ -563,10 +624,13 @@ test('Frente 5: RemoteOperations suporta images (R$ 290), hidrata catalog_inspec
   assert.equal(processedDiagRev1.payload.order.status, 'ready');
   assert.equal(processedDiagRev1.payload.order.revision, 1);
 
-  // Verifica que o SQL do Supabase e o Guia de Execução existem e incluem 'images'
+  // Verifica que o SQL do Supabase e o Guia de Execução existem e incluem 'images' e o executor seguro
   const sqlText = readFileSync(new URL('../schemas/supabase-brazil-operations.sql', import.meta.url), 'utf8');
   assert(sqlText.includes("'diagnostic','images','content','catalog','combined'"));
-  assert(existsSync(new URL('../docs/SUPABASE_GUIA_EXECUCAO.md', import.meta.url)));
+  assert(sqlText.includes('catanaops.operation_execute'));
+  const guideText = readFileSync(new URL('../docs/SUPABASE_GUIA_EXECUCAO.md', import.meta.url), 'utf8');
+  assert(guideText.includes("'diagnostic','images','content','catalog','combined'"));
+  assert(guideText.includes('catanaops.operation_execute'));
 });
 
 test('Rotas HTTP /api/editorial (images) e /api/studio/promote-diagnostic funcionam pelo servidor local', async () => {

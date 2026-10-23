@@ -141,11 +141,13 @@ export class StudioOperations {
    });
   }
   const baseBrand=studioFixture(scope,'clara').brand;
+  const originHost=(()=>{try{return new URL(snapshot.origin).hostname;}catch{return '';}})();
   const brand:StudioRequest['brand']={
    ...baseBrand,
    ...brandOverride,
    name:(brandOverride?.name||client.name||'Marca Promovida').slice(0,120),
    version:(brandOverride?.version||`promoted-${storeId}-${diagOrder.revision+1}`).slice(0,64),
+   mediaHosts:[...new Set([...(brandOverride?.mediaHosts??baseBrand.mediaHosts),...(originHost?[originHost]:[])])],
   };
   const batch=this.intakeBatchToOrder(snapshot,scope,brand);
   store.audit(diagOrder.id,'SCOPE-01','diagnostic_promoted_to_studio',{
@@ -322,11 +324,9 @@ export class StudioOperations {
       varRow['URL Imagens Externas']=varImage;
       varRow['Categoria do produto']=category;
       if(cv){
-       row_assign:{
-        varRow['Preço']=cv.price.replace('.',',');
-        varRow['GTIN/EAN']=cv.barcode;
-        varRow['Estoque']=cv.stock===null?'':String(cv.stock);
-       }
+       varRow['Preço']=cv.price.replace('.',',');
+       varRow['GTIN/EAN']=cv.barcode;
+       varRow['Estoque']=cv.stock===null?'':String(cv.stock);
       }
       blingRows.push(varRow);
      }
