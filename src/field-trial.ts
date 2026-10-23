@@ -268,7 +268,7 @@ export async function runFieldTrials(persistArtifacts = true) {
     checks.push(`Ponte LeakFinder converteu captura pública em ficha editorial vinculada ao pedido ${batchResult.orderId.slice(0, 8)} com SKU preservado (${auditT0.products[0]!.variants[0]!.sku}).`);
 
     const fieldSummary = {
-      reference: 'Ensaio de Campo Multi-Lojas (Linha Clara · Bambino Kids · Aprendizado Local)',
+      reference: 'Ensaio Sintético Multi-Lojas (Linha Clara · Bambino Kids · Aprendizado Local)',
       mode: 'Validação de campo local com motor heurístico/estatístico SQLite (sem nuvem paga)',
       at: new Date().toISOString(),
       checks,

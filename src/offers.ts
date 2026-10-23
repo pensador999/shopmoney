@@ -21,7 +21,7 @@ export function offerSnapshot(kind: ServiceKind) {
   if (!offer.enabled) throw Error('Serviço aguardando validação técnica; venda bloqueada.');
   const maxHoursCeiling = Math.round(((offer.cents / 100) * (1 - 0.4) / 60) * 100) / 100;
   return { ...offer, kind, version: offerVersion, currency: 'brl', locale: 'pt-BR', laborRate: 60, targetContribution: 0.4,
-    maxHoursCeiling, maxContentProducts: 10, suppliers: 1, adjustmentDays: 7, adjustments: 1, application: 'client', commercialEnabled: process.env.BRL_COMMERCIAL_ENABLED === 'true' } as const;
+    maxHoursCeiling, maxContentProducts: 10, suppliers: 1, adjustmentDays: 7, adjustments: 1, application: 'client', commercialEnabled: false } as const;
 }
 export const recurringOffer = Object.freeze({ cents: 149000, currency: 'brl', catalogLots: 2, diagnosticProducts: 10, carryover: false, enabled: false,
   requires: 'Dois pilotos pagos independentes, contribuição medida e necessidade repetida confirmada.' });

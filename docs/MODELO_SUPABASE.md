@@ -1,3 +1,5 @@
+> Estado vigente e sequência de execução: [ESTADO_OPERACIONAL.md](ESTADO_OPERACIONAL.md). As datas e contagens abaixo são registros históricos.
+
 # Modelo Supabase — primeira etapa
 
 Destino exclusivo: `aqkwbmggkvvfhqaivxlh`. Status em 17/10/2026: desenho preparado a partir de `src/store.ts`; acesso remoto recusado. Nenhuma migração aplicada. Este documento não é SQL executável nem comprovação de integração.

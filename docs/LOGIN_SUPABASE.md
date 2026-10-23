@@ -1,3 +1,5 @@
+> Estado vigente e sequência de execução: [ESTADO_OPERACIONAL.md](ESTADO_OPERACIONAL.md). As datas e contagens abaixo são registros históricos.
+
 # Administrador e acesso Supabase — 18/10/2026
 
 Projeto: aqkwbmggkvvfhqaivxlh. Email autorizado: catanaops@gmail.com.

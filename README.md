@@ -1,3 +1,5 @@
+> Estado vigente e sequência de execução: [ESTADO_OPERACIONAL.md](docs/ESTADO_OPERACIONAL.md). As datas e contagens abaixo são registros históricos.
+
 ## Direcionamento vigente: Catana Ops Brasil
 
 Catálogo e conteúdo para marcas brasileiras de vestuário Shopify. [Negócio, preços e limites](docs/BRASIL.md) · [Implementação, evidências e bloqueios](docs/IMPLEMENTACAO_BRASIL.md). Simulação: `node src/simulate-brazil.ts`. Novos pedidos BRL; histórico USD preservado. Ponte remota preparada, migração não aplicada nesta etapa por indisponibilidade da revisão automática. Nenhuma operação comercial liberada.

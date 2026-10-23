@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import AdmZip from 'adm-zip';
@@ -13,6 +14,12 @@ import { renderDescription } from './content-studio/render.ts';
 import { apparelCategoryPreset } from './content-studio/adaptive.ts';
 import type { StudioRequest, StudioScope } from './content-studio/contracts.ts';
 import { enqueueAgent } from './agents.ts';
+=======
+import {extname} from 'node:path';
+import {Store} from './store.ts';
+import {readTable} from './catalog.ts';
+import {inferSupplierMapping} from './learning.ts';
+>>>>>>> origin/main
 
 export interface AutopilotInput {
   filename?: string;
@@ -20,14 +27,6 @@ export interface AutopilotInput {
   storeName?: string;
   email?: string;
   storeUrl?: string;
-}
-
-export interface AutopilotStepLog {
-  role: 'research' | 'sales' | 'support' | 'planner' | 'finance' | 'production' | 'quality' | 'coordinator';
-  agentLabel: string;
-  action: string;
-  autoFilledFields: Record<string, unknown>;
-  status: 'done';
 }
 
 const defaultAutonomousCsv = [
@@ -58,210 +57,8 @@ export function detectCsvFormat(rawBuffer: Buffer | string, filename = 'catalogo
   return { delimiter, priceDecimalSeparator };
 }
 
-function slugify(value: string): string {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'loja-autonoma';
-}
-
-function buildStudioRequestFromProductRows(
-  store: Store,
-  scope: StudioScope,
-  brandName: string,
-  filename: string,
-  productId: string,
-  productRows: Row[],
-  mapping: Mapping,
-  stockCol?: string,
-  categoryCol?: string
-): StudioRequest {
-  const base = studioFixture(scope, 'clara');
-  const safeProductId = productId.trim().slice(0, 80) || 'PROD-1';
-  const first = productRows[0]!;
-  const title = (String(first[mapping.title] ?? safeProductId).trim() || safeProductId).slice(0, 200);
-  const rawDesc = mapping.description ? String(first[mapping.description] ?? '').trim() : '';
-  const rawCat = categoryCol ? String(first[categoryCol] ?? '').trim() : '';
-  const predicted = predictApparelCategory(store, scope, `${title} ${rawDesc} ${rawCat}`);
-  let category = (rawCat ? rawCat.toLowerCase() : predicted.predictedCategory).slice(0, 100);
-  const colorOpt = mapping.options.find(o => /cor|color|colour|tonalidade/i.test(o.name));
-  const sizeOpt = mapping.options.find(o => /tam|size|medida|numeracao/i.test(o.name)) ?? mapping.options.find(o => o !== colorOpt);
-
-  const rawVariants = productRows.map((r, idx) => {
-    const rawSku = String(r[mapping.sku] ?? '').trim() || `${safeProductId}-V${idx + 1}`;
-    const rawColor = colorOpt ? String(r[colorOpt.column] ?? '').trim().slice(0, 100) : '';
-    const rawSize = sizeOpt ? String(r[sizeOpt.column] ?? '').trim().slice(0, 100) : '';
-    return {
-      id: `V-${safeProductId}-${idx + 1}`.slice(0, 100),
-      productId: safeProductId,
-      sku: rawSku.slice(0, 90),
-      color: rawColor,
-      size: rawSize,
-    };
-  });
-
-  const anyColor = rawVariants.some(v => v.color);
-  const anySize = rawVariants.some(v => v.size) || (!anyColor && rawVariants.length > 1);
-  const seenCombos = new Set<string>();
-  const seenSkus = new Set<string>();
-  const variants = rawVariants.map((v, idx) => {
-    const color = anyColor ? (v.color || 'Padrão') : '';
-    let size = anySize ? (v.size || `Tam ${idx + 1}`) : '';
-    let comboKey = JSON.stringify([color, size]);
-    if (seenCombos.has(comboKey)) {
-      size = size ? `${size}-${idx + 1}` : `V${idx + 1}`;
-      comboKey = JSON.stringify([color, size]);
-    }
-    seenCombos.add(comboKey);
-    let sku = v.sku;
-    if ((sku === safeProductId && (rawVariants.length > 1 || color || size)) || seenSkus.has(sku)) {
-      sku = `${sku}-${[color, size].filter(Boolean).join('-') || idx + 1}`.slice(0, 100);
-    }
-    seenSkus.add(sku);
-    return { ...v, sku, color, size };
-  });
-  if (variants.some(v => v.size) && !variants.every(v => v.size)) {
-    for (let i = 0; i < variants.length; i++) {
-      if (!variants[i]!.size) variants[i]!.size = `U-${i + 1}`;
-    }
-  }
-
-  const catalogVariants = productRows.map((r, idx) => {
-    const price = normalizedPrice(String(r[mapping.price] ?? '0'), mapping);
-    const rawBarcode = mapping.barcode ? String(r[mapping.barcode] ?? '').trim() : '';
-    const barcode = /^\d+$/.test(rawBarcode) ? rawBarcode : '';
-    const rawStock = stockCol ? String(r[stockCol] ?? '').trim() : '';
-    const parsedStock = /^\d+$/.test(rawStock) ? Number(rawStock) : null;
-    return {
-      variantId: variants[idx]!.id,
-      price: /^\d+(\.\d{1,2})?$/.test(price) ? price : '0.00',
-      barcode,
-      stock: parsedStock,
-    };
-  });
-
-  const gradeSummary = variants
-    .map(v => [v.color, v.size].filter(Boolean).join('/') || v.sku)
-    .join(', ')
-    .slice(0, 1200);
-
-  const facts: StudioRequest['product']['facts'] = [
-    {
-      id: 'presentation',
-      section: 'presentation',
-      text: (rawDesc ? `${title}: ${rawDesc}` : `${title} — peça da marca ${brandName}.`).slice(0, 1500),
-      source: `Planilha do fornecedor (${filename})`.slice(0, 1000),
-      approved: true,
-    },
-    {
-      id: 'features',
-      section: 'features',
-      text: `Grade verificada com ${variants.length} variante(s) (${gradeSummary}).`.slice(0, 1500),
-      source: `Mapeamento determinístico (${filename})`.slice(0, 1000),
-      approved: true,
-    },
-    {
-      id: 'care',
-      section: 'care',
-      text: 'Seguir rigorosamente as instruções de lavagem e conservação da etiqueta interna.',
-      source: `Diretriz operacional ${brandName}`.slice(0, 1000),
-      approved: true,
-    },
-  ];
-
-  const blocks: StudioRequest['blocks'] = facts.map(f => ({
-    id: `blk-${f.id}`,
-    section: f.section,
-    text: f.text,
-    factIds: [f.id],
-    approved: true,
-  }));
-
-  const preset = apparelCategoryPreset(category);
-  const bodyNorm = [title, ...blocks.map(b => b.text)].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  if (preset.incompatibleTerms.some(term => bodyNorm.includes(term))) {
-    category = 'vestuario';
-  }
-  const finalPreset = apparelCategoryPreset(category);
-  const components: NonNullable<StudioRequest['adaptive']>['components'] = finalPreset.kind === 'kit'
-    ? [
-        { id: 'comp-1', title: 'Peça Principal', factIds: ['presentation'], mediaIds: [] },
-        { id: 'comp-2', title: 'Peça Complementar', factIds: ['features'], mediaIds: [] },
-      ]
-    : [];
-
-  const distinctColors = [...new Set(variants.map(v => v.color).filter(Boolean))];
-  const media: StudioRequest['media'] = (distinctColors.length ? distinctColors : ['']).slice(0, 2).map((col, idx) => {
-    const matchingVariantIds = variants.filter(v => v.color === col).map(v => v.id);
-    return {
-      id: `IMG-${safeProductId}-${idx + 1}`.slice(0, 100),
-      productId: safeProductId,
-      url: idx === 0 ? '/studio-fixture-sand.svg' : '/studio-fixture-blue.svg',
-      source: `Estúdio local supervisionado (${brandName})`.slice(0, 1000),
-      authorized: true,
-      approved: true,
-      variantIds: matchingVariantIds,
-      color: col,
-      role: idx === 0 ? 'hero' : 'detail',
-      view: idx === 0 ? 'front' : 'detail',
-      viewConfirmed: true,
-      alt: `${title}${col ? ' — ' + col : ''}`.slice(0, 300),
-    };
-  });
-
-  const combinedTextLower = [title, ...facts.map(f => f.text)].join(' ').toLocaleLowerCase('pt-BR');
-  return {
-    version: 'content-studio-1',
-    scope,
-    brand: {
-      ...base.brand,
-      name: brandName.slice(0, 120),
-      version: `autopilot-${slugify(brandName)}-1`.slice(0, 64),
-      introduction: '',
-      forbiddenTerms: base.brand.forbiddenTerms.filter(t => !combinedTextLower.includes(t.toLocaleLowerCase('pt-BR'))),
-      approved: true,
-      materialAuthorization: true,
-    },
-    product: {
-      id: safeProductId,
-      title,
-      existing: false,
-      source: `Planilha do fornecedor (${filename})`.slice(0, 1000),
-      original: {
-        html: '',
-        text: (rawDesc || `${title} (${brandName})`).slice(0, 12000),
-        approved: true,
-      },
-      variants,
-      facts,
-    },
-    media,
-    mode: 'rewrite',
-    blocks,
-    adaptive: {
-      category,
-      coverage: {
-        kind: 'file',
-        source: filename.slice(0, 1000),
-        observedAt: new Date().toISOString(),
-        missing: [],
-      },
-      requirements: [],
-      conflicts: [],
-      components,
-      catalog: {
-        currency: 'BRL',
-        approved: true,
-        source: filename.slice(0, 1000),
-        variants: catalogVariants,
-      },
-    },
-  };
-}
-
 export async function runAgentAutopilot(store: Store, input: AutopilotInput = {}) {
+<<<<<<< HEAD
   const service = new Service(store);
   const studio = new ContentStudio(store);
   const steps: AutopilotStepLog[] = [];
@@ -660,4 +457,21 @@ export async function runAgentAutopilot(store: Store, input: AutopilotInput = {}
     adaptation,
     steps,
   };
+=======
+  const filename=input.filename?.trim()||'demonstracao.csv';
+  const rawBuffer=input.dataBase64?Buffer.from(input.dataBase64,'base64'):Buffer.from(defaultAutonomousCsv);
+  const format=detectCsvFormat(rawBuffer,filename);
+  const rows=await readTable(rawBuffer,extname(filename)==='.xlsx'?'.xlsx':'.csv',550,format.delimiter);
+  const headers=Object.keys(rows[0]??{});
+  const inferred=inferSupplierMapping(store,'',headers);
+  const name=input.storeName?.trim()||'Catálogo em revisão';
+  // Unknown contact remains unknown. No clients, approvals or money are invented.
+  return {ok:true,mode:'supervised-intake',status:'needs_review',orderId:null,
+    client:{name,email:input.email||null,storeUrl:input.storeUrl||null},
+    autoDetected:{filename,...format,mapping:inferred.mapping,mappingConfidence:inferred.confidence},
+    rowCount:rows.length,requiresHumanReview:true,
+    pending:['Confirmar cliente e contato','Conferir mapeamento e escopo antes de criar o pedido'],
+    economics:{contribution:null},steps:[{role:'planner',agentLabel:'Planejamento',status:'needs_review',
+      action:'Colunas sugeridas. Confirme os vínculos no formulário; nenhuma produção ou aprovação foi executada.',autoFilledFields:inferred.mapping}]};
+>>>>>>> origin/main
 }

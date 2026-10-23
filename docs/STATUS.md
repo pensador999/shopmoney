@@ -1,3 +1,5 @@
+> Estado vigente e sequência de execução: [ESTADO_OPERACIONAL.md](ESTADO_OPERACIONAL.md). As datas e contagens abaixo são registros históricos.
+
 # Atualização Brasil — 19/10/2026
 
 Prevalecem [BRASIL.md](BRASIL.md) e [IMPLEMENTACAO_BRASIL.md](IMPLEMENTACAO_BRASIL.md). Quatro serviços sintéticos completos localmente; oito papéis com respostas controladas, sem novo teste semântico Eve. Perfis/contratos/revisões/custos e aprendizado por cliente implementados. Migração e RLS reais pendentes por indisponibilidade da revisão automática; ponte testada somente em fixture. Não declarar operação integrada.

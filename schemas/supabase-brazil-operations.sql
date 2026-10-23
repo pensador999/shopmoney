@@ -1,5 +1,8 @@
 -- Additive validation-only bridge. SECURITY INVOKER, membership and explicit workspace predicates.
--- Snapshot of an MCP migration to apply after approval review becomes available.
+-- Trusted executor owns the private RPC; browser roles have no direct table writes.
+create role catanaops_executor nologin nobypassrls;
+grant authenticated to catanaops_executor;
+grant usage,create on schema catanaops to catanaops_executor;
 create table catanaops.operation_snapshots (
  workspace_id uuid not null,order_id uuid not null,payload jsonb not null,
  version bigint not null default 0,generation bigint not null default 0,
@@ -11,7 +14,8 @@ create table catanaops.operation_snapshots (
 );
 alter table catanaops.operation_snapshots enable row level security;
 revoke all on catanaops.operation_snapshots from public,anon,authenticated;
-grant select,insert,update on catanaops.operation_snapshots to authenticated;
+grant select on catanaops.operation_snapshots to authenticated;
+grant select,insert,update on catanaops.operation_snapshots to catanaops_executor;
 create policy operation_member_read on catanaops.operation_snapshots for select to authenticated
 using(exists(select 1 from catanaops.workspace_members m where m.workspace_id=operation_snapshots.workspace_id and m.user_id=(select auth.uid())));
 create policy operation_member_insert on catanaops.operation_snapshots for insert to authenticated
@@ -21,8 +25,8 @@ using(exists(select 1 from catanaops.workspace_members m where m.workspace_id=op
 with check(exists(select 1 from catanaops.workspace_members m where m.workspace_id=operation_snapshots.workspace_id and m.user_id=(select auth.uid())));
 
 -- Operators can write only test-mode rows in their own workspace. No new access to live payments/outbox.
-grant insert,update on catanaops.clients,catanaops.orders,catanaops.tasks to authenticated;
-grant insert on catanaops.order_revisions,catanaops.artifacts,catanaops.audit_events to authenticated;
+grant insert,update on catanaops.clients,catanaops.orders,catanaops.tasks to catanaops_executor;
+grant insert on catanaops.order_revisions,catanaops.artifacts,catanaops.audit_events to catanaops_executor;
 create policy brazil_client_insert on catanaops.clients for insert to authenticated with check(exists(select 1 from catanaops.workspace_members m where m.workspace_id=clients.workspace_id and m.user_id=(select auth.uid())));
 create policy brazil_client_update on catanaops.clients for update to authenticated
 using(exists(select 1 from catanaops.workspace_members m where m.workspace_id=clients.workspace_id and m.user_id=(select auth.uid())))
@@ -40,8 +44,8 @@ create policy brazil_task_update on catanaops.tasks for update to authenticated
 using(exists(select 1 from catanaops.orders o join catanaops.workspace_members m on m.workspace_id=o.workspace_id where o.workspace_id=tasks.workspace_id and o.id=tasks.order_id and o.mode='test' and m.user_id=(select auth.uid())))
 with check(exists(select 1 from catanaops.orders o join catanaops.workspace_members m on m.workspace_id=o.workspace_id where o.workspace_id=tasks.workspace_id and o.id=tasks.order_id and o.mode='test' and m.user_id=(select auth.uid())));
 
-create function public.catanaops_operation(p_workspace uuid,p_order uuid,p_action text,p_payload jsonb default null,p_owner uuid default null,p_generation bigint default null,p_version bigint default null)
-returns jsonb language plpgsql security invoker set search_path='' as $$
+create function catanaops.operation_execute(p_workspace uuid,p_order uuid,p_action text,p_payload jsonb default null,p_owner uuid default null,p_generation bigint default null,p_version bigint default null)
+returns jsonb language plpgsql security definer set search_path='' as $$
 declare r catanaops.operation_snapshots%rowtype; c uuid; o jsonb; t jsonb; f jsonb; role_name text; kind_name text; state_name text; rev integer;
 begin
  if auth.uid() is null or not exists(select 1 from catanaops.workspace_members where workspace_id=p_workspace and user_id=auth.uid()) then raise exception 'Workspace membership required' using errcode='42501';end if;
@@ -100,6 +104,14 @@ begin
  end if;
  return jsonb_build_object('payload',r.payload,'version',r.version,'generation',r.generation,'lease_owner',r.lease_owner);
 end $$;
+alter function catanaops.operation_execute(uuid,uuid,text,jsonb,uuid,bigint,bigint) owner to catanaops_executor;
+revoke create on schema catanaops from catanaops_executor;
+revoke all on function catanaops.operation_execute(uuid,uuid,text,jsonb,uuid,bigint,bigint) from public,anon;
+grant execute on function catanaops.operation_execute(uuid,uuid,text,jsonb,uuid,bigint,bigint) to authenticated;
+create function public.catanaops_operation(p_workspace uuid,p_order uuid,p_action text,p_payload jsonb default null,p_owner uuid default null,p_generation bigint default null,p_version bigint default null)
+returns jsonb language sql security invoker set search_path='' as $$
+ select catanaops.operation_execute(p_workspace,p_order,p_action,p_payload,p_owner,p_generation,p_version)
+$$;
 revoke all on function public.catanaops_operation(uuid,uuid,text,jsonb,uuid,bigint,bigint) from public,anon;
 grant execute on function public.catanaops_operation(uuid,uuid,text,jsonb,uuid,bigint,bigint) to authenticated;
 create policy catanaops_validation_upload on storage.objects for insert to authenticated

@@ -51,7 +51,7 @@ const FIELD_SYNONYMS:Record<string,string[]>={
 };
 
 export function inferSupplierMapping(store:Store,clientId:string,headers:string[],supplierKey='fornecedor-local') {
-  const clientOrders=store.orders().filter(o=>o.clientId===clientId&&o.scopeApproved&&o.mapping?.productId);
+  const clientOrders=store.orders().filter(o=>o.clientId===clientId&&o.scopeApproved&&o.mapping?.productId&&o.mapping.supplierKey===supplierKey);
   const learnedColumns:Record<string,Set<string>>={};
   for(const o of clientOrders){
     for(const k of ['productId','title','sku','price','barcode','description','vendor','imageUrl'] as const){
@@ -94,11 +94,11 @@ export function inferSupplierMapping(store:Store,clientId:string,headers:string[
   const options:{name:string;column:string}[]=[];
   if(mColor.column)options.push({name:'Cor',column:mColor.column});
   if(mSize.column)options.push({name:'Tamanho',column:mSize.column});
-  const resolvedTitle=mTitle.column||headers[1]||headers[0]||'title';
-  const resolvedSku=mSku.column||headers[2]||headers[0]||'sku';
+  const resolvedTitle=mTitle.column;
+  const resolvedSku=mSku.column;
   const resolvedProductId=(mProductId.column&&(!options.length||mProductId.column!==resolvedSku))
     ?mProductId.column
-    :(options.length?resolvedTitle:resolvedSku)||headers[0]||'product_id';
+    :(options.length?resolvedTitle:resolvedSku);
   const coreScores=[mProductId.column?mProductId.confidence:(options.length?mTitle.confidence:mSku.confidence),mTitle.confidence,mSku.confidence,mPrice.confidence];
   const overallConfidence=Number((coreScores.reduce((a,b)=>a+b,0)/coreScores.length).toFixed(4));
   return {
@@ -107,7 +107,7 @@ export function inferSupplierMapping(store:Store,clientId:string,headers:string[
       productId:resolvedProductId,
       title:resolvedTitle,
       sku:resolvedSku,
-      price:mPrice.column||headers[3]||'price',
+      price:mPrice.column,
       ...(mBarcode.column?{barcode:mBarcode.column}:{}),
       ...(mDesc.column&&mDesc.column!==resolvedTitle?{description:mDesc.column}:{}),
       ...(mVendor.column?{vendor:mVendor.column}:{}),

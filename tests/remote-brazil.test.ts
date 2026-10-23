@@ -71,3 +71,18 @@ test('aprendizado sobrevive à retomada remota e fica vinculado ao pedido',async
   assert.equal(state.payload.order.learningProposals![0].status,'approved');
   assert.equal(state.payload.order.learningProposals![0].scope,'client-only');
 });
+
+test('artefatos remotos preservam histórico e retomada carrega a versão atual',async()=>{
+ const f=fixture(),i=input();let state=await f.remote.create(workspace,i);
+ const oldFiles=structuredClone(state.payload.files);
+ await f.remote.action(workspace,i.id,'approve');
+ state=await f.remote.action(workspace,i.id,'economics',{hours:1,fees:0,costs:0,taxes:0,note:'Primeira medição sintética'});
+ const previousCoordinator=state.payload.files.find(file=>file.name==='coordinator-0.json')!;
+ state=await f.remote.action(workspace,i.id,'economics',{hours:2,fees:0,costs:0,taxes:0,note:'Segunda medição sintética'});
+ for(const original of [...oldFiles,previousCoordinator])assert(state.payload.files.some(file=>file.id===original.id&&file.sha256===original.sha256));
+ const hydrated=await f.remote.hydrate(state.payload);
+ try{assert.equal(hydrated.get(i.id).hours,2);
+  const current=state.payload.files.filter(file=>file.name==='coordinator-0.json').at(-1)!;
+  assert.equal(hydrated.artifact(i.id,'coordinator-0.json').toString(),f.objects.get('/storage/v1/object/catanaops-private/'+current.path)!.toString());
+ }finally{hydrated.close();}
+});

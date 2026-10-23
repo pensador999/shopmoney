@@ -6,19 +6,16 @@ export async function mountStudio({api,notice}){
   const link=el('link',undefined,{rel:'stylesheet',href:'/content-studio.css'});document.head.append(link);
   let request,record=null,dirty=true,creationId=crypto.randomUUID(),busy=false;
   const status=el('p','Carregando…',{'aria-live':'polite'}),list=el('select',undefined,{'aria-label':'Conteúdo salvo'});
-  const intro=el('article');intro.append(el('p','CONTEÚDO DE PRODUTO · GESTÃO 100% AGENTES',{class:'eyebrow'}),el('h2','Uma peça, a linguagem da sua loja — automatizada pelos Agentes.'),
-    el('p','Os Agentes extraem fatos, normalizam variantes, geram as prévias Essencial e Editorial, auditam QA, registram o esforço (R$ 60/h) e gravam o aprendizado local da loja sem preenchimento manual.'),status);
+  const intro=el('article');intro.append(el('p','CONTEÚDO DE PRODUTO · REVISÃO SUPERVISIONADA',{class:'eyebrow'}),el('h2','Uma peça, a linguagem da sua loja.'),
+    el('p','Prepare fatos e imagens autorizados, compare as prévias e confirme a revisão. Custos e aprendizado exigem registro e aprovação próprios.'),status);
   const actions=el('div',undefined,{class:'actions'});
   const action=(label,fn,parent=actions)=>{const b=el('button',label,{type:'button'});b.onclick=()=>run(fn);parent.append(b);return b;};
-  const autoStudioBtn=action('⚡ Orquestrar Ficha Completa pelos Agentes (Zero Preenchimento)',async()=>{
+  const autoStudioBtn=action('Conferir etapas e pendências',async()=>{
     await saveDraft();
-    operator.value=operator.value||'Agente Autônomo de Qualidade (QA)';
-    note.value=note.value||'Conferência automática determinística de fatos, variantes e prévia visual concluída pelos Agentes.';
-    visual.checked=true;text.checked=true;source.checked=true;
     const res=await api('studio/orchestrate',{id:record.id,scope:record.request.scope,template:template.value||'editorial',color:color.value,operator:operator.value,note:note.value,...(orderId.value?{orderId:orderId.value}:{})});
     await loadRecord(res.record);await refreshList();
     const hCount=res.overview?.order?.handoffs?.verifiedRoles?.length??0;
-    notice(`Ficha 100% orquestrada pelos Agentes: aprovada, esforço R$60/h consolidado, aprendizado gravado e pedido vinculado (${hCount}/8 handoffs verificados)!`);
+    notice('Ficha vinculada e pendências conferidas. Aprovação, custos e entrega exigem evidências próprias.');
   });
   autoStudioBtn.classList.add('primary');
   action('Novo exemplo · Linha Clara',()=>loadFixture('clara'));action('Novo exemplo · Ateliê Horizonte',()=>loadFixture('horizonte'));

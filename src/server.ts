@@ -125,7 +125,7 @@ export function createApp(store: Store, port = 4318) {
             const recRow = store.db.prepare('SELECT data FROM artifacts WHERE order_id=? AND name=?').get(o.id, `reconciliation-${o.revision}.json`) as any;
             return { ...o, economics: economics(o), tasks: orderTasks(o), handoffs: orderHandoffLedger(store, o.id), reconciliation: recRow ? JSON.parse(Buffer.from(recRow.data).toString()) : null };
           }), gates: service.readiness(), policy, formats: supportedFormats(),
-          offers: Object.fromEntries(Object.entries(offers).map(([k, v]) => [k, { ...v, commercialEnabled: v.enabled && (store.setting('brlCommercialEnabled', false) || process.env.BRL_COMMERCIAL_ENABLED === 'true') }])),
+          offers: Object.fromEntries(Object.entries(offers).map(([k, v]) => [k, { ...v, commercialEnabled: false }])),
           recurringOffer,
           coordination: allOrders.map(orderAssignment), team: agentContracts, business: businessContext,
           messages: store.db.prepare('SELECT * FROM outbox ORDER BY created_at DESC LIMIT 100').all(),
@@ -232,7 +232,7 @@ export function createApp(store: Store, port = 4318) {
         const inferred = inferSupplierMapping(store, String(body.clientId ?? 'local'), columns, String(body.supplierKey ?? `fornecedor-${slug}`));
         const samplePrice = rows.map(r => String(r[inferred.mapping.price] ?? '').trim()).find(Boolean) ?? '';
         const refinedPriceDec: '.' | ',' = /^\d+,\d{1,2}$/.test(samplePrice) ? ',' : /^\d+\.\d{1,2}$/.test(samplePrice) ? '.' : autoFmt.priceDecimalSeparator;
-        result = { columns, rows: rows.length, detectedFormat: { ...autoFmt, priceDecimalSeparator: refinedPriceDec, detectedBrand, detectedEmail: `operacao@${slug}.com.br` }, inferred };
+        result = { columns, rows: rows.length, detectedFormat: { ...autoFmt, priceDecimalSeparator: refinedPriceDec, detectedBrand, detectedEmail: '' }, inferred };
       }
       else if (req.method === 'POST' && path === '/api/orders') result = await service.create({ ...z.object({ name: z.string().min(1), email: z.email(), filename: z.string().max(200), data: z.string(), mapping: mappingSchema, profile: supplierProfileSchema.optional(), demo: z.boolean().default(false), service:z.enum(['catalog','combined']).default('catalog'),content:z.unknown().optional() }).parse(body), data: Buffer.from(body.data, 'base64') });
       else if (req.method === 'POST' && path === '/api/editorial') result=createEditorial(store,z.object({name:z.string().min(1),email:z.email(),service:z.enum(['diagnostic','content','images']),brief:z.unknown(),demo:z.boolean().default(true)}).parse(body));

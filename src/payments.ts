@@ -18,7 +18,7 @@ export class Payments {
     const owner = randomUUID(); assert(this.store.acquire('checkout', owner), 'Cobrança em preparação.');
     try {
       const o = this.store.get(id);
-      assert(!o.offer || o.offer.commercialEnabled || this.store.setting('brlCommercialEnabled', false) || process.env.BRL_COMMERCIAL_ENABLED === 'true', 'Oferta brasileira em validação: cobrança bloqueada.');
+      assert(!o.offer || o.offer.commercialEnabled, 'Oferta brasileira em validação: cobrança bloqueada.');
       assert(!o.demo && o.scopeApproved && o.status === 'awaiting_payment', 'Pedido não pode ser cobrado.');
       assert(!this.store.setting('aiPaused', false), 'Capacidade de IA indisponível; novas cobranças suspensas.');
       if (this.live) {
