@@ -30,6 +30,8 @@ try{
  await identity('anon');await deny('anon bloqueado',()=>rpc('create',payload),/permission denied/);
  await identity('authenticated','10000000-0000-4000-8000-000000000099');await deny('sem vínculo bloqueado',()=>rpc('create',payload),/membership/);
  await identity('authenticated',uid);const created=await rpc('create',payload);checks.push('criação autenticada');
+ await deny('escrita direta não contorna RPC',()=>db.exec("update catanaops.orders set status='closed'"),/permission denied/);
+ await deny('snapshot não aceita edição direta',()=>db.exec("update catanaops.operation_snapshots set version=99"),/permission denied/);
  assert.deepEqual((await rpc('create',payload)).payload,created.payload);checks.push('repetição idempotente');
  await deny('hash diferente bloqueado',()=>rpc('create',{...payload,requestHash:'b'.repeat(64)}),/Idempotency/);
  await identity('authenticated',other);await deny('outro workspace bloqueado',()=>rpc('get'),/membership/);

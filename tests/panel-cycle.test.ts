@@ -54,10 +54,27 @@ test('ciclo HTTP preserva perfil, tarefas e custos até encerramento simulado', 
     assert.equal(state.coordination[0].owner,'Coordenação');
     assert.equal(Object.keys(state.team).length,8);
     assert(state.orders[0].tasks.every((t:any)=>t.state==='done'));
+    const enabledOffers=Object.values(state.offers).filter((o:any)=>o.enabled);
+    assert.equal(enabledOffers.length,4);
+    assert.deepEqual(enabledOffers.map((o:any)=>o.shortName),['Diagnóstico R$ 190','Conteúdo R$ 490','Cadastro R$ 690','Combinado R$ 990']);
+    assert(enabledOffers.every((o:any)=>o.summary&&o.maxHours>0&&o.version==='br-2026-10-19.1'&&o.commercialEnabled===false));
     assert.equal(store.db.prepare('SELECT status FROM outbox').get()?.status,'draft');
     const live={...store.get(id),demo:false,paymentMode:'live' as const};
     store.save(live);
     assert.equal((await request('action',{id,action:'demoDelivery'})).status,400);
     assert.equal(economics({...live,status:'refund_pending'}).contribution,null);
+    const diagRes = await request('inspection/diagnostic',{name:'Atelier Diag HTTP',email:'diag-http@example.com',origin:'https://atelier-diag.example.com',mode:'synthetic',autoProcess:true});
+    assert.equal(diagRes.status,200,JSON.stringify(diagRes.body));
+    assert.equal(diagRes.body.order.offer.kind,'diagnostic');
+    assert.equal(diagRes.body.order.amount,19000);
+    assert.equal(diagRes.body.order.status,'ready');
+    assert(diagRes.body.audit.findings.length>0);
+    const savedSnap = JSON.parse(store.artifact(diagRes.body.order.id,'inspection-0.json').toString()).snapshot;
+    const diagIdempotent = await request('inspection/diagnostic',{name:'Atelier Diag HTTP',email:'diag-http@example.com',origin:'https://atelier-diag.example.com',snapshot:savedSnap,autoProcess:true});
+    assert.equal(diagIdempotent.status,200);
+    assert.equal(diagIdempotent.body.order.id,diagRes.body.order.id);
+    assert.equal(diagIdempotent.body.order.status,'ready');
+    assert.equal((await request('inspection/diagnostic',{origin:'http://localhost:4318',mode:'synthetic'})).status,400);
+    assert.equal((await request('inspection/diagnostic',{origin:'https://loja-a.example.com',approvedOrigin:'https://loja-b.example.com',mode:'synthetic'})).status,400);
   } finally { await new Promise<void>(r=>server.close(()=>r()));store.close(); }
 });

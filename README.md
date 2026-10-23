@@ -1,3 +1,5 @@
+> Estado vigente e sequência de execução: [ESTADO_OPERACIONAL.md](docs/ESTADO_OPERACIONAL.md). As datas e contagens abaixo são registros históricos.
+
 ## Direcionamento vigente: Catana Ops Brasil
 
 Catálogo e conteúdo para marcas brasileiras de vestuário Shopify. [Negócio, preços e limites](docs/BRASIL.md) · [Implementação, evidências e bloqueios](docs/IMPLEMENTACAO_BRASIL.md). Simulação: `node src/simulate-brazil.ts`. Novos pedidos BRL; histórico USD preservado. Ponte remota preparada, migração não aplicada nesta etapa por indisponibilidade da revisão automática. Nenhuma operação comercial liberada.
@@ -7,11 +9,11 @@ Catálogo e conteúdo para marcas brasileiras de vestuário Shopify. [Negócio, 
 Repositório central do projeto: https://github.com/pensador999/shopmoney.
 Catana Ops é o nome operacional; `catalog-ops` permanece como nome técnico da aplicação e da pasta local.
 
-**Fase atual: validação local, sem operação comercial liberada.** Objetivo: entregar um piloto de preparação de catálogo Shopify em dólares, medindo custos e esforço total.
+**Fase atual: validação local brasileira (`br-2026-10-19.1`), sem operação comercial externa liberada.** Objetivo: validar e operar os 4 serviços avulsos em reais (`Diagnóstico de catálogo R$ 190`, `Conteúdo de produto R$ 490`, `Preparação de cadastro R$ 690`, `Lançamento combinado R$ 990`) para marcas brasileiras de vestuário na Shopify, medindo custos, tributos e esforço por etapa a R$ 60/h (meta de contribuição ≥ 40%).
 
 Comece pelo [índice do projeto](docs/README.md), pelo [estado e próximos passos](docs/STATUS.md) e pelas [regras de contribuição](CONTRIBUTING.md).
 
-Aplicação local para preparar catálogos de fornecedores como novos rascunhos Shopify. Interface em português, entrega em inglês, originais preservados e decisões auditáveis.
+Aplicação local para diagnóstico, conteúdo e preparação de catálogos de fornecedores como novos rascunhos Shopify e validação Bling (59 colunas). Interface e entregas em português (`pt-BR`), originais preservados, 8 contratos de handoff verificados por hash e decisões auditáveis (histórico USD preservado apenas para compatibilidade).
 
 ## Executar
 

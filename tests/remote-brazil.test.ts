@@ -37,8 +37,16 @@ test('ponte remota simulada: cria, retoma, processa, baixa e não duplica produ�
   s=await f.remote.action(workspace,i.id,'process');assert.equal(s.payload.order.status,'ready');
   const count=f.objects.size;await f.remote.action(workspace,i.id,'process');assert.equal(f.objects.size,count);
   assert((await f.remote.download(workspace,i.id)).length>100);await f.remote.action(workspace,i.id,'demoDelivery');
-  assert.equal((await f.remote.create(workspace,i)).payload.order.id,i.id);assert.equal(f.objects.size,count);
-  s=await f.remote.action(workspace,i.id,'economics',{hours:1,fees:0,costs:0,taxes:0,note:'Custos sintéticos declarados'});assert.equal(s.payload.order.taxes,0);
+  assert.equal(f.objects.size,count+1);
+  assert.equal((await f.remote.create(workspace,i)).payload.order.id,i.id);assert.equal(f.objects.size,count+1);
+  s=await f.remote.action(workspace,i.id,'economics',{hours:1,stageHours:{intake:0.25,production:0.75},fees:0,costs:0,taxes:0,note:'Custos sintéticos declarados'});assert.equal(s.payload.order.taxes,0);
+  assert(s.payload.files.some(file=>file.name==='coordinator-0.json'));
+  assert.equal(s.payload.order.stageHours?.production,0.75);
+  await f.remote.action(workspace,i.id,'revise',{brief:{products:[{id:'P001',title:'Camiseta Revisada',description:'Algodão',source:'Fixture'}]},reason:'scope-adjustment'});
+  s=await f.remote.action(workspace,i.id,'revisionApprove');
+  assert.equal(s.payload.order.status,'queued');
+  assert(s.payload.files.some(file=>file.name==='support-1.json'));
+  assert(s.payload.files.some(file=>file.name==='planner-1.json'));
   assert.equal(f.state.lease_owner,null);
 });
 test('upload interrompido persiste identidade; repetir mesma solicitação recupera originais',async()=>{
@@ -62,4 +70,19 @@ test('aprendizado sobrevive à retomada remota e fica vinculado ao pedido',async
   state=await f.remote.action(workspace,i.id,'learningReview',{id:proposal.id,approved:true,testEvidence:'Teste aprovado pelo operador'});
   assert.equal(state.payload.order.learningProposals![0].status,'approved');
   assert.equal(state.payload.order.learningProposals![0].scope,'client-only');
+});
+
+test('artefatos remotos preservam histórico e retomada carrega a versão atual',async()=>{
+ const f=fixture(),i=input();let state=await f.remote.create(workspace,i);
+ const oldFiles=structuredClone(state.payload.files);
+ await f.remote.action(workspace,i.id,'approve');
+ state=await f.remote.action(workspace,i.id,'economics',{hours:1,fees:0,costs:0,taxes:0,note:'Primeira medição sintética'});
+ const previousCoordinator=state.payload.files.find(file=>file.name==='coordinator-0.json')!;
+ state=await f.remote.action(workspace,i.id,'economics',{hours:2,fees:0,costs:0,taxes:0,note:'Segunda medição sintética'});
+ for(const original of [...oldFiles,previousCoordinator])assert(state.payload.files.some(file=>file.id===original.id&&file.sha256===original.sha256));
+ const hydrated=await f.remote.hydrate(state.payload);
+ try{assert.equal(hydrated.get(i.id).hours,2);
+  const current=state.payload.files.filter(file=>file.name==='coordinator-0.json').at(-1)!;
+  assert.equal(hydrated.artifact(i.id,'coordinator-0.json').toString(),f.objects.get('/storage/v1/object/catanaops-private/'+current.path)!.toString());
+ }finally{hydrated.close();}
 });

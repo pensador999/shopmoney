@@ -20,20 +20,22 @@ const defaultAutonomousCsv = [
   'ALC-205;Calca Alfaiataria Sarja Premium;ALC-205-PR-G;289,90;7891234560022;Preto;G;0;Calca;Atelier Linha Clara;Sarja 98% algodao 2% elastano com bolso faca e cintura media.',
 ].join('\n');
 
-export function detectCsvFormat(rawBuffer: Buffer, filename: string): {
+export function detectCsvFormat(rawBuffer: Buffer | string, filename = 'catalogo.csv'): {
   delimiter: ',' | ';';
   priceDecimalSeparator: '.' | ',';
 } {
   if (extname(filename).toLowerCase() === '.xlsx') {
     return { delimiter: ',', priceDecimalSeparator: '.' };
   }
-  const sample = rawBuffer.subarray(0, 4096).toString('utf8');
+  const sample = typeof rawBuffer === 'string' ? rawBuffer.slice(0, 4096) : rawBuffer.subarray(0, 4096).toString('utf8');
   const firstLine = sample.split(/\r?\n/)[0] ?? '';
   const semicolons = (firstLine.match(/;/g) ?? []).length;
   const commas = (firstLine.match(/,/g) ?? []).length;
   const delimiter: ',' | ';' = semicolons > commas ? ';' : ',';
-  const hasCommaDecimal = /\b\d+,\d{2}\b/.test(sample);
-  const priceDecimalSeparator: '.' | ',' = delimiter === ';' && hasCommaDecimal ? ',' : '.';
+  const hasCommaDecimal = delimiter === ';'
+    ? /(?:^|;|\s)\d+,\d{1,2}(?:;|\r|\n|$)/.test(sample)
+    : /"\s*\d+,\d{1,2}\s*"/.test(sample);
+  const priceDecimalSeparator: '.' | ',' = hasCommaDecimal ? ',' : '.';
   return { delimiter, priceDecimalSeparator };
 }
 

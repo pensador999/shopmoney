@@ -21,7 +21,8 @@ export function validateHandoff(role:AgentRole,input:unknown,expected:{orderId:s
 }
 export function recordHandoff(store:Store,role:AgentRole,input:unknown,expected:{orderId:string;revision:number;service:string}) {
   const validated=validateHandoff(role,input,expected);
-  store.artifact(expected.orderId,`${role}-${expected.revision}.json`,JSON.stringify(validated));
+  const data=Buffer.from(JSON.stringify(validated));
+  store.db.prepare('INSERT INTO artifacts VALUES(?,?,?) ON CONFLICT(order_id,name) DO UPDATE SET data=excluded.data').run(expected.orderId,`${role}-${expected.revision}.json`,data);
   return validated;
 }
 export function recordPreSaleHandoffs(store:Store,orderId:string,input:{fit:'qualified'|'unverified'|'declined';sources:string[];need:string;buyer:string;scope:string;evidence?:string[]}) {

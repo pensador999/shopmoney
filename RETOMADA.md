@@ -1,3 +1,5 @@
+> Estado vigente e sequência de execução: [ESTADO_OPERACIONAL.md](docs/ESTADO_OPERACIONAL.md). As datas e contagens abaixo são registros históricos.
+
 ## Prioridade atual — fluxo local sem IA, 21/10/2026
 
 Usuário adiou explicitamente o ponto 1 (geração real) até adicionar API. Não executar novas chamadas para provar qualidade editorial agora. Ler docs/FLUXO_LOCAL_SEM_IA_2026-10-21.md. Implementados vínculos locais ficha/pedido/tarefas, entrada manual/JSON/URL Shopify, imagens candidatas, componentes e guias tipados com formulário, filtros e avaliação lexical sintética. 101/101 testes + TypeScript + sintaxe JS aprovados. Browser confirmou salvar, vínculo persistido após reinício e guia nas duas prévias; screenshot artifacts/local-flow-2026-10-21.png. API/modelo/credenciais e Supabase não alterados. Vínculo não simula pagamento nem promove estado comercial. Geração/QA reais, avaliação semântica e importação continuam pendentes. Mudanças locais, sem push.

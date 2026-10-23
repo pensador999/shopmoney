@@ -1,3 +1,5 @@
+> Estado vigente e sequência de execução: [ESTADO_OPERACIONAL.md](ESTADO_OPERACIONAL.md). As datas e contagens abaixo são registros históricos.
+
 - [Conteúdo e prévia — implementação e uso](CONTEUDO_PREVIA.md) — painel local, skill, revisões, quatro prévias e testes.
 - [Conteúdo por produto, identidade e prévias](ANALISE_DESCRICOES_IDENTIDADE_PREVIAS.md) — revisão do repositório privado atual e proposta de skill/templates.
 - [Teste de campo LeakFinder — Insider](TESTE_CAMPO_LEAKFINDER_INSIDER.md) — coleta real de vestuário, 69 variantes, limites e melhorias verificadas.

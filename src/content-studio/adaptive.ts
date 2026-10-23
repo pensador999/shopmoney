@@ -37,9 +37,9 @@ export function apparelCategoryPreset(category:string){
   if(/\b(camisa|camiseta|blusa|jaqueta|moletom|top|regata|polo)\b/.test(c))return {kind:'top' as const,incompatibleTerms:['solado antiderrapante','palmilha anatomica','bico quadrado','entrepernas']};
   return {kind:'general' as const,incompatibleTerms:[] as string[]};
 }
-export function pending(input:StudioRequest){
+export function pending(input:StudioRequest,role?:'planner'|'production'|'quality'){
   const a=input.adaptive;
-  const items=checkRequest(input).filter(i=>!['REQUIRED_PENDING','CONFLICT','SOURCE_UNSUPPORTED'].includes(i.code)).map(i=>({id:i.code+':'+i.subject,question:i.message,required:true,owner:'planner'}));
+  const items=checkRequest(input).filter(i=>!['REQUIRED_PENDING','CONFLICT','SOURCE_UNSUPPORTED',...(role==='quality'?['COPY_PENDING']:[])].includes(i.code)).map(i=>({id:i.code+':'+i.subject,question:i.message,required:true,owner:'planner'}));
   if(input.product.variants.some(v=>!v.sku))items.push({id:'missing-sku',question:'Há variantes sem SKU. Confirme os códigos antes de exportar cadastro; a descrição pode avançar pelo ID do produto.',required:!!input.adaptive?.catalog,owner:'support'});
   if(a){
     if(a.coverage.kind==='unsupported')items.push({id:'source',question:'Fonte incompatível. Forneça arquivo ou ficha manual.',required:true,owner:'support'});
@@ -107,18 +107,19 @@ export function catalogFiles(input:StudioRequest,template:'essential'|'editorial
   const rendered=renderDescription(input,template,{selectedColor:color}),html=rendered.html;
   const seoTitle=input.product.title.replace(/\s+/g,' ').trim().slice(0,70);
   const seoDescription=rendered.plan.blocks.map(b=>b.text.replace(/\s+/g,' ').trim()).join(' ').slice(0,160);
+  const shortDescription=(rendered.plan.blocks.map(b=>b.text.replace(/\s+/g,' ').trim()).filter(Boolean).join(' ')||input.product.facts.filter(f=>f.approved).map(f=>f.text.replace(/\s+/g,' ').trim()).join(' ')).replace(/^[\s\u0000-\u001f=+@-]+/u,'').slice(0,250);
   const category=input.adaptive?.category??'';
   if(input.product.existing)return {'alteracoes-produto.json':JSON.stringify({id:input.product.id,previous:input.product.original,proposedDescription:html,seoTitle,seoDescription,variants:catalog.variants,currency:catalog.currency,apply:false},null,2)};
   const headers=JSON.parse(readFileSync(new URL('../../schemas/bling-59.json',import.meta.url),'utf8')).headers as string[];
   const bling:Record<string,string>[]=[];
-  const parent:Record<string,string>={'Código':input.product.id,'Descrição':input.product.title,'Unidade':'UN','Produto Variação':'Produto','Marca':input.brand.name,'Categoria do produto':category};bling.push(parent);
+  const parent:Record<string,string>={'Código':input.product.id,'Descrição':input.product.title,'Unidade':'UN','Descrição Complementar':html,'Produto Variação':'Produto','Marca':input.brand.name,'Descrição Curta':shortDescription,'Categoria do produto':category};bling.push(parent);
   const shopify=input.product.variants.map((v,index)=>{
     const c=catalog.variants.find(c=>c.variantId===v.id)!;
     if(v.sku===input.product.id&&(input.product.variants.length>1||v.color||v.size))throw Error('SKU da variante colide com código do pai.');
-    bling.push({'Código':v.sku,'Descrição':[v.color,v.size].filter(Boolean).join(' / ')||input.product.title,'Unidade':'UN','Código Pai':input.product.id,'Produto Variação':'Variação','Marca':input.brand.name,'Categoria do produto':category,'Preço':c.price.replace('.',','),'GTIN/EAN':c.barcode,'Estoque':c.stock===null?'':String(c.stock)});
+    bling.push({'Código':v.sku,'Descrição':[v.color,v.size].filter(Boolean).join(' / ')||input.product.title,'Unidade':'UN','Descrição Complementar':html,'Código Pai':input.product.id,'Produto Variação':'Variação','Marca':input.brand.name,'Descrição Curta':shortDescription,'Categoria do produto':category,'Preço':c.price.replace('.',','),'GTIN/EAN':c.barcode,'Estoque':c.stock===null?'':String(c.stock)});
     return {'Title':index===0?input.product.title:'','URL handle':'catana-'+createHash('sha256').update(JSON.stringify([input.scope,input.product.id])).digest('hex').slice(0,32),'Description':index===0?html:'','Vendor':index===0?input.brand.name:'','Type':index===0?category:'','Status':'draft','Published on online store':'false','SKU':v.sku,'Barcodes':c.barcode,'Option1 name':v.color?'Cor':v.size?'Tamanho':'Title','Option1 value':v.color||v.size||'Default Title','Option2 name':v.color&&v.size?'Tamanho':'','Option2 value':v.color?v.size:'','Price':c.price,'SEO Title':index===0?seoTitle:'','SEO Description':index===0?seoDescription:''};
   });
-  if(input.product.variants.length===1&&!input.product.variants[0].color&&!input.product.variants[0].size){bling.shift();bling[0]['Código Pai']='';bling[0]['Produto Variação']='Produto';bling[0]['Descrição']=input.product.title;bling[0]['Marca']=input.brand.name;}
+  if(input.product.variants.length===1&&!input.product.variants[0].color&&!input.product.variants[0].size){bling.shift();bling[0]['Código Pai']='';bling[0]['Produto Variação']='Produto';bling[0]['Descrição']=input.product.title;bling[0]['Marca']=input.brand.name;bling[0]['Descrição Complementar']=html;bling[0]['Descrição Curta']=shortDescription;}
   for(const row of [...bling,...shopify])for(const value of Object.values(row))if(/^[\s\u0000-\u001f]*[=+@-]/u.test(value))throw Error('CSV contém célula com possível fórmula; corrija a origem sem alterar identificadores silenciosamente.');
   return {'shopify-rascunhos.csv':stringify(shopify,{header:true,record_delimiter:'\r\n'}),'bling-validacao.csv':stringify(bling,{header:true,columns:headers,delimiter:';',bom:true,record_delimiter:'\r\n'}),'cadastro.json':JSON.stringify({currency:catalog.currency,source:catalog.source,seoTitle,seoDescription,compatibility:'Não verificada por importação',variants:input.product.variants},null,2)};
 }

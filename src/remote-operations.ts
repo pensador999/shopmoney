@@ -46,7 +46,7 @@ export class RemoteOperations {
       const c=snapshot.client;s.db.prepare('INSERT INTO clients VALUES(?,?,?)').run(c.id,c.email,c.name);s.save(snapshot.order);
       const brand=snapshot.order.brandProfile as any;if(brand?.version)s.profile(c.id,brand.version,brand);
       for(const proposal of snapshot.order.learningProposals??[]){assert(proposal.clientId===c.id&&proposal.orderId===snapshot.order.id,'Aprendizado fora do cliente/pedido.');s.db.prepare('INSERT INTO learning_proposals VALUES(?,?,?)').run(proposal.id,c.id,JSON.stringify(proposal));}
-      for(const raw of snapshot.files){const file=fileSchema.parse(raw);assert(file.path.startsWith(`${snapshot.order.remoteWorkspaceId}/${snapshot.order.id}/`),'Arquivo fora do pedido.');
+      for(const raw of new Map(snapshot.files.map(file=>[file.name,file])).values()){const file=fileSchema.parse(raw);assert(file.path.startsWith(`${snapshot.order.remoteWorkspaceId}/${snapshot.order.id}/`),'Arquivo fora do pedido.');
         const r=await this.transport('/storage/v1/object/authenticated/catanaops-private/'+file.path,{method:'GET'});assert(r.ok,'Arquivo remoto indisponível.');
         const bytes=Buffer.from(await r.arrayBuffer());assert(bytes.length===file.size&&hash(bytes)===file.sha256,'Arquivo remoto adulterado.');s.artifact(snapshot.order.id,file.name,bytes);
       }return s;
@@ -55,11 +55,11 @@ export class RemoteOperations {
   snapshot(s:Store,id:string,workspace:string,previous:RemoteFile[]=[]){
     const order=s.get(id);order.remoteWorkspaceId=workspace;
     const client=s.db.prepare('SELECT * FROM clients WHERE id=?').get(order.clientId) as any;
-    const files=(s.db.prepare('SELECT name,data FROM artifacts WHERE order_id=?').all(id) as any[]).map(row=>{
+    const currentFiles=(s.db.prepare('SELECT name,data FROM artifacts WHERE order_id=?').all(id) as any[]).map(row=>{
       const bytes=Buffer.from(row.data),sha256=hash(bytes),old=previous.find(f=>f.name===row.name&&f.sha256===sha256);
       const file=old??{id:randomUUID(),name:row.name,path:'',sha256,size:bytes.length};
       if(!old)file.path=`${workspace}/${id}/${order.revision}/${file.id}`;return fileSchema.parse(file);
-    });return {order,client,files,tasks:orderTasks(order)} satisfies Snapshot;
+    });const files=[...previous.filter(old=>!currentFiles.some(file=>file.id===old.id)),...currentFiles];return {order,client,files,tasks:orderTasks(order)} satisfies Snapshot;
   }
   async create(workspace:string,input:unknown){
     z.uuid().parse(workspace);await this.authorize();
@@ -95,12 +95,13 @@ export class RemoteOperations {
             await svc.revise(id,Buffer.from(request.data,'base64'),request.filename,request.mapping,request.reason);
           }break;
         }
-        case 'revisionApprove':assert(o.status==='revision_approval','Revisão indisponível.');o.scopeApproved=true;o.status='queued';store.save(o);break;
+        case 'revisionApprove':svc.approveRevision(id);break;
         case 'learningPropose':proposeLearning(store,{...z.object({problem:z.string(),evidence:z.array(z.string()),proposedRule:z.string()}).strict().parse(extra),orderId:id,revision:o.revision});break;
         case 'learningReview':{const values=z.object({id:z.uuid(),approved:z.boolean(),testEvidence:z.string()}).strict().parse(extra);reviewLearning(store,values.id,o.clientId,{approved:values.approved,testEvidence:values.testEvidence});break;}
         case 'economics':{
-          const values=z.object({hours:z.number().finite().nonnegative(),fees:z.number().finite().nonnegative(),costs:z.number().finite().nonnegative(),taxes:z.number().finite().nonnegative(),note:z.string().min(10).max(2000)}).strict().parse(extra);
-          Object.assign(o,values,{economicsNote:values.note,economicsRecordedAt:new Date().toISOString()});store.save(o);break;
+          const stageHoursSchema=z.partialRecord(z.enum(['intake','plan','production','quality','delivery','adjustments']),z.number().finite().nonnegative()).optional();
+          const values=z.object({hours:z.number().finite().nonnegative().optional(),stageHours:stageHoursSchema,fees:z.number().finite().nonnegative(),costs:z.number().finite().nonnegative(),taxes:z.number().finite().nonnegative(),note:z.string().min(10).max(2000)}).strict().refine(v=>v.hours!==undefined||v.stageHours!==undefined,'Informe horas totais ou por etapa.').parse(extra);
+          svc.recordEconomics(id,values);break;
         }
         default:throw Error('Ação não permitida.');
       }

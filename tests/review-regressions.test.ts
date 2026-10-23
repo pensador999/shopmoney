@@ -48,3 +48,25 @@ test('cabeçalhos desconhecidos não recebem colunas obrigatórias por posição
   assert.equal(inferred.requiresHumanReview,true);
  }finally{store.close();}
 });
+
+test('orquestração preserva identificadores, restrições e pendências sem inventar aprovação',()=>{
+ const store=new Store(':memory:');try{
+  const client=store.client('Teste','test@example.invalid');
+  const scope={workspaceId:'local',clientId:client.id,storeId:'test'};
+  const studio=new ContentStudio(store),ops=new StudioOperations(studio),req=studioFixture(scope);
+  req.brand.approved=false;req.brand.materialAuthorization=false;
+  req.product.variants[1].sku=req.product.variants[0].sku;
+  req.blocks=[{id:'bad',section:'features',text:'Produto milagroso impermeável',factIds:['presentation'],approved:false}];
+  req.media.forEach(m=>{m.authorized=false;m.approved=false;});
+  const record=studio.create(req),before=record.requestHash;
+  const result=ops.orchestrate(record.id,scope);
+  assert.equal(result.record.requestHash,before);
+  assert.equal(result.record.approval,undefined);
+  assert.equal(result.record.request.brand.approved,false);
+  assert(result.record.request.brand.forbiddenTerms.includes('milagroso'));
+  assert(result.record.request.media.every(m=>!m.authorized&&!m.approved));
+  assert.equal(result.overview.order?.scopeApproved,false);
+  assert.equal(result.overview.order?.paymentConfirmed,false);
+  assert.equal(result.overview.order?.status,'needs_info');
+ }finally{store.close();}
+});

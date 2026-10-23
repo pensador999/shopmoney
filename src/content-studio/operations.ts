@@ -1,30 +1,56 @@
 import {randomUUID} from 'node:crypto';
 import AdmZip from 'adm-zip';
 import {ContentStudio,type StudioRecord} from './service.ts';
-import {checkRequest,type StudioRequest,type StudioScope} from './contracts.ts';
+import {checkRequest,studioRequestSchema,type StudioRequest,type StudioScope} from './contracts.ts';
+import {apparelCategoryPreset} from './adaptive.ts';
 import {intakeSnapshot} from './intake.ts';
 import {renderDescription,digest} from './render.ts';
 import {offerSnapshot} from '../offers.ts';
 import {orderTasks,economics,applyOrderEconomics} from '../order-workflow.ts';
 import {csv,hash} from '../catalog.ts';
-import {recordHandoff,orderHandoffLedger} from '../handoffs.ts';
+import {recordHandoff,recordPreSaleHandoffs,orderHandoffLedger} from '../handoffs.ts';
+import {predictApparelCategory} from '../learning.ts';
+import {publicOrigin} from '../inspection/snapshot.ts';
+import {businessDays} from '../policy.ts';
 const deterministicUuid=(seed:string)=>{const h=hash(seed);return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;};
+const luminance=(hex:string)=>{
+ const values=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)/255).map(v=>v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4));
+ return values[0]! * 0.2126 + values[1]! * 0.7152 + values[2]! * 0.0722;
+};
+const claimTokens=(s:string)=>(s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().match(/\b(?:uv\s*\d+\+?|fpu\s*\d+\+?|impermeavel|antiodor|antibacterian[oa]|certificad[oa]|secagem rapida|couro|antiderrapante|anti-atrito|costuras planas|algodao|poliester|elastano|nylon|\d+(?:[.,]\d+)?\s*%)/g)??[]);
 export class StudioOperations {
  private studio:ContentStudio;
  constructor(studio:ContentStudio){this.studio=studio;studio.store.db.exec('CREATE TABLE IF NOT EXISTS studio_order_links(studio_id TEXT PRIMARY KEY REFERENCES content_studios(id),order_id TEXT NOT NULL REFERENCES orders(id),order_revision INTEGER NOT NULL);');}
+ private upsertArtifact(orderId:string,name:string,data:Buffer|string){
+  const buf=Buffer.isBuffer(data)?data:Buffer.from(data);
+  this.studio.store.db.prepare('INSERT INTO artifacts VALUES(?,?,?) ON CONFLICT(order_id,name) DO UPDATE SET data=excluded.data').run(orderId,name,buf);
+ }
  connect(id:string,scope:StudioScope,orderId?:string){
   const store=this.studio.store;
+  const isAllowedEditorial=(ord:any)=>Boolean(ord.demo);
   return store.transaction(()=>{
    const r=this.studio.get(id,scope);if(r.status==='cancelled')throw Error('Conteúdo cancelado.');
    const old=store.db.prepare('SELECT * FROM studio_order_links WHERE studio_id=?').get(id) as any;
-   if(old){if(orderId&&old.order_id!==orderId)throw Error('Ficha já vinculada a outro pedido.');if(!orderId)return this.overview(id,scope);}
+   if(old){
+    let oldActiveEditorial=false;
+    try{
+     const oldOrder=store.get(old.order_id,scope.clientId);
+     oldActiveEditorial=isAllowedEditorial(oldOrder)&&['content','combined'].includes(oldOrder.offer?.kind??'')&&!['cancelled','closed','refunded','refund_pending'].includes(oldOrder.status);
+    }catch{oldActiveEditorial=false;}
+    if(!oldActiveEditorial){
+     store.db.prepare('DELETE FROM studio_order_links WHERE studio_id=?').run(id);
+    }else{
+     if(orderId&&old.order_id!==orderId)throw Error('Ficha já vinculada a outro pedido.');
+     if(!orderId)return this.overview(id,scope);
+    }
+   }
    if(!orderId){const offer=offerSnapshot('content');orderId=randomUUID();store.save({id:orderId,clientId:scope.clientId,status:'needs_info',demo:true,filename:'editorial-supervisionado',mapping:{},scopeApproved:false,amount:offer.cents,currency:offer.currency,offer,createdAt:new Date().toISOString(),revision:0,corrections:0,hours:0,fees:0,costs:0,error:'Pedido editorial local: aprovação e execução comerciais permanecem separadas.'});}
    const o=store.get(orderId,scope.clientId);
    if(o.remoteWorkspaceId&&o.remoteWorkspaceId!==scope.workspaceId)throw Error('Workspace incompatível.');
-   if(!o.demo||!['content','combined'].includes(o.offer?.kind??'')||['cancelled','closed','refunded','refund_pending'].includes(o.status))throw Error('Vínculo exige pedido local de validação editorial ativo.');
+   if(!isAllowedEditorial(o)||!['content','combined'].includes(o.offer?.kind??'')||['cancelled','closed','refunded','refund_pending'].includes(o.status))throw Error('Vínculo exige pedido local de validação editorial ativo.');
    const peers=store.db.prepare('SELECT s.workspace_id,s.store_id FROM studio_order_links l JOIN content_studios s ON s.id=l.studio_id WHERE l.order_id=?').all(orderId) as any[];
    if(peers.some(p=>p.workspace_id!==scope.workspaceId||p.store_id!==scope.storeId))throw Error('Pedido pertence a outro workspace/loja.');
-   store.db.prepare('INSERT INTO studio_order_links VALUES(?,?,?) ON CONFLICT(studio_id) DO UPDATE SET order_revision=excluded.order_revision').run(id,orderId,o.revision);
+   store.db.prepare('INSERT INTO studio_order_links VALUES(?,?,?) ON CONFLICT(studio_id) DO UPDATE SET order_id=excluded.order_id,order_revision=excluded.order_revision').run(id,orderId,o.revision);
    store.audit(orderId,'SCOPE-01','studio_order_connected',{studioId:id,scope,orderRevision:o.revision});return this.overview(id,scope);
   });
  }
@@ -86,7 +112,7 @@ export class StudioOperations {
    const brief={version:'studio-order-brief-1',orderId:o.id,revision:o.revision,scope,studios:peers.map(p=>({id:p.id,revision:p.revision,requestHash:p.requestHash,productId:p.request.product.id}))};
    const briefJson=JSON.stringify(brief,null,2);
    if(!store.db.prepare('SELECT 1 FROM artifacts WHERE order_id=? AND name=?').get(o.id,'original'))store.artifact(o.id,'original',briefJson);
-   store.artifact(o.id,`studio-brief-${o.revision}.json`,briefJson);
+   this.upsertArtifact(o.id,`studio-brief-${o.revision}.json`,briefJson);
    if(issues.length===0){
     if(o.status==='needs_info'){o.status='scoped';delete o.error;}
     if(o.offer){
@@ -174,14 +200,23 @@ export class StudioOperations {
    recordHandoff(store,'production',{...expected,evidence:[inputHash],pending:[],artifacts:['conteudo.csv','evidencias.json'],manifestHash:hash(JSON.stringify(manifest))},expected);
    const qaHandoff=recordHandoff(store,'quality',{...expected,evidence:[inputHash],pending:[],passed:true,checks,executor:'independent-code'},expected);
    zip.addFile('manifest.json',Buffer.from(JSON.stringify(manifest,null,2)));
-   store.artifact(o.id,`handoff-${o.revision}.json`,JSON.stringify(qaHandoff));
-   store.artifact(o.id,`delivery-${o.revision}.zip`,zip.toBuffer());
+   this.upsertArtifact(o.id,`handoff-${o.revision}.json`,JSON.stringify(qaHandoff));
+   this.upsertArtifact(o.id,`delivery-${o.revision}.zip`,zip.toBuffer());
    o.status='ready';o.qa=manifest;o.deliveryId=`delivery-${o.id}-${o.revision}`;delete o.error;store.save(o);
    store.audit(o.id,'QA-01','studio_order_package_ready',manifest);
    const client=store.db.prepare('SELECT email FROM clients WHERE id=?').get(o.clientId) as any;
    store.enqueue(o.deliveryId,o.id,client.email,'delivery',`Catana Ops — entrega ${o.id}`,'Pacote preparado a partir das fichas aprovadas no Content Studio. Aplicação pelo cliente; nenhuma alteração foi publicada.');
    return this.overview(id,scope);
   });
+ }
+ // Preparation preserves facts, identifiers, permissions and unresolved questions.
+ orchestrate(id:string,scope:StudioScope,options:{template?:'essential'|'editorial';color?:string;operator?:string;note?:string;orderId?:string}={}){
+  const record=this.studio.get(id,scope);
+  if(record.status==='cancelled')throw Error('Conteúdo cancelado.');
+  this.connect(id,scope,options.orderId);
+  const overview=this.synchronizeScope(id,scope);
+  return {record:this.studio.get(id,scope),overview,pending:this.studio.handoff(id,scope).questions,
+    requiresOperatorApproval:true,mode:'supervised'};
  }
  overview(id:string,scope:StudioScope){
   const r=this.studio.get(id,scope),store=this.studio.store;

@@ -38,21 +38,23 @@ const diceSimilarity=(a:string,b:string)=>{
 };
 
 const FIELD_SYNONYMS:Record<string,string[]>={
-  productId:['product_id','productid','id_produto','cod_pai','codigo_pai','referencia','ref','ref_peca','parent_id','agrupador'],
-  title:['title','titulo','nome','produto','nome_produto','desc_curta','descricao_curta'],
-  sku:['sku','codigo','cod_item','codigo_variante','ref_variante','item_sku'],
-  price:['price','preco','valor','vlr_venda','preco_venda','valor_unitario'],
-  barcode:['barcode','gtin','ean','ean13','cod_barras','codigo_barras','gtin_ean'],
-  description:['description','descricao','detalhes','body_html','descricao_complementar'],
-  color:['cor','color','variacao_cor','grade_cor','tonalidade'],
-  size:['tamanho','size','tam','grade_tam','medida_grade'],
+  productId:['product_id','productid','id_produto','cod_pai','codigo_pai','referencia','ref','ref_peca','parent_id','agrupador','codigo_integracao','cod_prod','codprod','id_pai','modelo','familia','handle','url_handle'],
+  title:['title','titulo','nome','produto','nome_produto','desc_curta','descricao_curta','descrprod','descricao_produto','nome_item','peca','titulo_produto'],
+  sku:['sku','codigo','cod_item','codigo_variante','ref_variante','item_sku','variant_sku','cod_sku','sku_variante','refforn','ad_idexterno'],
+  price:['price','preco','valor','vlr_venda','preco_venda','valor_unitario','variant_price','preco_unitario','decvlr','valor_venda','vlr_unit'],
+  barcode:['barcode','gtin','ean','ean13','cod_barras','codigo_barras','gtin_ean','cod_barras_ean13','variant_barcode','barcodes','cod_ean','codigo_ean'],
+  description:['description','descricao','detalhes','body_html','descricao_complementar','descricao_tecnica','observacoes','informacoes_adicionais','body'],
+  vendor:['vendor','marca','fabricante','marca_fabricante','fornecedor','brand','loja'],
+  imageUrl:['image_url','imageurl','url_imagens_externas','endimagem','imagem','image_src','foto','url_imagem'],
+  color:['cor','color','variacao_cor','grade_cor','tonalidade','cor_predominante','cor_item'],
+  size:['tamanho','size','tam','grade_tam','medida_grade','ad_tamanho','numeracao','medida'],
 };
 
 export function inferSupplierMapping(store:Store,clientId:string,headers:string[],supplierKey='fornecedor-local') {
   const clientOrders=store.orders().filter(o=>o.clientId===clientId&&o.scopeApproved&&o.mapping?.productId&&o.mapping.supplierKey===supplierKey);
   const learnedColumns:Record<string,Set<string>>={};
   for(const o of clientOrders){
-    for(const k of ['productId','title','sku','price','barcode','description'] as const){
+    for(const k of ['productId','title','sku','price','barcode','description','vendor','imageUrl'] as const){
       const col=(o.mapping as any)[k];
       if(typeof col==='string'&&col){learnedColumns[k]??=new Set();learnedColumns[k].add(norm(col));}
     }
@@ -61,11 +63,12 @@ export function inferSupplierMapping(store:Store,clientId:string,headers:string[
       if(key){learnedColumns[key]??=new Set();learnedColumns[key].add(norm(opt.column));}
     }
   }
-  const bestMatch=(field:string)=>{
+  const bestMatch=(field:string,excludeCols:Set<string>=new Set())=>{
     const synonyms=FIELD_SYNONYMS[field]??[field];
     const learned=learnedColumns[field]??new Set<string>();
     let bestCol='',bestScore=0;
     for(const h of headers){
+      if(excludeCols.has(h))continue;
       const nh=norm(h);
       const learnedBoost=learned.has(nh)?0.38:0;
       const synScore=Math.max(...synonyms.map(s=>diceSimilarity(nh,s)));
@@ -74,37 +77,57 @@ export function inferSupplierMapping(store:Store,clientId:string,headers:string[
     }
     return {column:bestScore>=0.45?bestCol:'',confidence:bestScore,learnedFromHistory:learned.has(norm(bestCol))};
   };
-  const mProductId=bestMatch('productId'),mTitle=bestMatch('title'),mSku=bestMatch('sku'),mPrice=bestMatch('price'),mBarcode=bestMatch('barcode'),mDesc=bestMatch('description'),mColor=bestMatch('color'),mSize=bestMatch('size');
+  const mSku=bestMatch('sku');
+  const mPrice=bestMatch('price',new Set([mSku.column].filter(Boolean)));
+  const mBarcode=bestMatch('barcode',new Set([mSku.column,mPrice.column].filter(Boolean)));
+  const mColor=bestMatch('color',new Set([mSku.column,mPrice.column,mBarcode.column].filter(Boolean)));
+  const mSize=bestMatch('size',new Set([mSku.column,mPrice.column,mBarcode.column,mColor.column].filter(Boolean)));
+  let mTitle=bestMatch('title',new Set([mSku.column,mPrice.column,mBarcode.column,mColor.column,mSize.column].filter(Boolean)));
+  let mDesc=bestMatch('description',new Set([mSku.column,mPrice.column,mBarcode.column,mColor.column,mSize.column,mTitle.column].filter(Boolean)));
+  if(!mTitle.column&&mDesc.column){
+    mTitle=mDesc;
+    mDesc=bestMatch('description',new Set([mSku.column,mPrice.column,mBarcode.column,mColor.column,mSize.column,mTitle.column].filter(Boolean)));
+  }
+  const mProductId=bestMatch('productId',new Set([mPrice.column,mBarcode.column,mColor.column,mSize.column,mTitle.column,mDesc.column].filter(Boolean)));
+  const mVendor=bestMatch('vendor',new Set([mSku.column,mPrice.column,mBarcode.column,mColor.column,mSize.column,mTitle.column,mProductId.column].filter(Boolean)));
+  const mImageUrl=bestMatch('imageUrl',new Set([mSku.column,mPrice.column,mBarcode.column,mColor.column,mSize.column,mTitle.column,mProductId.column].filter(Boolean)));
   const options:{name:string;column:string}[]=[];
   if(mColor.column)options.push({name:'Cor',column:mColor.column});
   if(mSize.column)options.push({name:'Tamanho',column:mSize.column});
-  const coreScores=[mProductId.confidence,mTitle.confidence,mSku.confidence,mPrice.confidence];
+  const resolvedTitle=mTitle.column;
+  const resolvedSku=mSku.column;
+  const resolvedProductId=(mProductId.column&&(!options.length||mProductId.column!==resolvedSku))
+    ?mProductId.column
+    :(options.length?resolvedTitle:resolvedSku);
+  const coreScores=[mProductId.column?mProductId.confidence:(options.length?mTitle.confidence:mSku.confidence),mTitle.confidence,mSku.confidence,mPrice.confidence];
   const overallConfidence=Number((coreScores.reduce((a,b)=>a+b,0)/coreScores.length).toFixed(4));
   return {
     mapping:{
       supplierKey,
-      productId:mProductId.column,
-      title:mTitle.column,
-      sku:mSku.column,
+      productId:resolvedProductId,
+      title:resolvedTitle,
+      sku:resolvedSku,
       price:mPrice.column,
       ...(mBarcode.column?{barcode:mBarcode.column}:{}),
-      ...(mDesc.column?{description:mDesc.column}:{}),
+      ...(mDesc.column&&mDesc.column!==resolvedTitle?{description:mDesc.column}:{}),
+      ...(mVendor.column?{vendor:mVendor.column}:{}),
+      ...(mImageUrl.column?{imageUrl:mImageUrl.column}:{}),
       options,
     },
     confidence:overallConfidence,
-    fieldConfidences:{productId:mProductId,title:mTitle,sku:mSku,price:mPrice,barcode:mBarcode,description:mDesc,color:mColor,size:mSize},
+    fieldConfidences:{productId:mProductId,title:mTitle,sku:mSku,price:mPrice,barcode:mBarcode,description:mDesc,vendor:mVendor,imageUrl:mImageUrl,color:mColor,size:mSize},
     learnedOrdersCount:clientOrders.length,
     requiresHumanReview:true as const,
   };
 }
 
 const APPAREL_PRIORS:Record<string,string[]>={
-  camisa:['camisa','manga','gola','punho','botao','botoes','colarinho','uv50','fpu50','protecao solar','blusa'],
-  camiseta:['camiseta','tshirt','t-shirt','malha','gola redonda','careca','algodao','basica'],
-  calca:['calca','jeans','cintura','barra','entrepernas','quadril','bolso','bermuda','short'],
-  botina:['botina','bota','calcado','solado','palmilha','cano','couro','antiderrapante','sapato','tenis'],
-  kit:['kit','conjunto','combo','duplo','pares','pecas','superior','inferior'],
-  infantil:['infantil','kids','bebe','rn',' Juvenil','crianca','escolar','menino','menina'],
+  camisa:['camisa','manga','gola','punho','botao','botoes','colarinho','uv50','fpu50','protecao solar','blusa','linho'],
+  camiseta:['camiseta','tshirt','t-shirt','malha','gola redonda','careca','algodao','basica','regata','polo'],
+  calca:['calca','jeans','cintura','barra','entrepernas','quadril','bolso','bermuda','short','alfaiataria','sarja','legging'],
+  botina:['botina','bota','calcado','solado','palmilha','cano','couro','antiderrapante','sapato','tenis','sandalia'],
+  kit:['kit','conjunto','combo','pack'],
+  infantil:['infantil','kids','bebe','rn','juvenil','crianca','escolar','menino','menina'],
 };
 
 export function predictApparelCategory(store:Store,scope:StudioScope,text:string) {

@@ -37,6 +37,10 @@ export function approveMessage(store: Store, id: string) {
   store.db.prepare("UPDATE outbox SET status='approved' WHERE id=?").run(id);
   store.audit(message.order_id, policy.rules.outreach, 'message_approved', { id });
 }
+export function isOptOutText(text: string): boolean {
+  const normalized = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return /\b(unsubscribe|remove me|stop contacting|not interested|opt[- ]?out|nao tenho interesse|sem interesse|descadastrar|remover da lista|parar de receber|sair da lista|nao quero receber)\b/i.test(normalized);
+}
 function imap() { return new ImapFlow({ host: 'imap.gmail.com', port: 993, secure: true, auth: { user: process.env.GMAIL_USER!, pass: process.env.GMAIL_APP_PASSWORD! }, logger: false }); }
 export async function pollInbox(store: Store, filter?: { subject: string }) {
   assert(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD, 'Configure Gmail com senha de app.');
@@ -52,7 +56,7 @@ export async function pollInbox(store: Store, filter?: { subject: string }) {
       const sender = parsed.from?.value[0]?.address?.toLowerCase() ?? '';
       const body = (parsed.text ?? '').slice(0, 12000), subject = (parsed.subject ?? '').slice(0, 300);
       store.db.prepare('INSERT INTO inbox VALUES(?,?,?,?,?,?,?)').run(id, sender, subject, body, '', 'received', new Date().toISOString());
-      if (/\b(unsubscribe|remove me|stop contacting|not interested|opt out)\b/i.test(`${subject}\n${body}`)) { suppress(store, sender, 'Resposta de recusa'); continue; }
+      if (isOptOutText(`${subject}\n${body}`)) { suppress(store, sender, 'Resposta de recusa'); continue; }
       const customer = store.db.prepare('SELECT id FROM clients WHERE email=?').get(sender) as any;
       const lead = store.db.prepare('SELECT id FROM leads WHERE email=?').get(sender);
       if (customer || lead) enqueueAgent(store, customer ? 'support' : 'sales', { inboxId: id, subject, body, attachments: parsed.attachments.map(a => ({ filename: a.filename, size: a.size })), note: 'Cliente conhecido: atendimento primeiro; dúvida comercial exige revisão. Anexos não importados automaticamente; confirmar associação e mapeamento.' }, customer?.id ?? null, `mail-${id}`);
